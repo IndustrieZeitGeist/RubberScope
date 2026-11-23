@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RubberScope · Ozonrissanalyse</title>
+<link rel="stylesheet" href="/assets/style.css">
+<script src="/assets/web.js" defer></script>
+</head>
+<body>
+<main>
+<header><span>RubberScope 2.4</span><h1>Ozonrisse im Mikroskopbild</h1>
+<p>Risskandidaten segmentieren, ihre Lage prüfen und Bildkennwerte berechnen.</p></header>
+<div class="workspace">
+<section>
+<h2>Analyse</h2>
+<form id="analysis">
+<label>Mikroskopbild <input type="file" name="image" accept=".png,.jpg,.jpeg,.tif,.tiff,.bmp" required></label>
+<small>PNG, JPEG, TIFF oder BMP · bis 16 MiB und 4 Megapixel</small>
+<label>Verfahren <select name="algorithm"><option value="rissoptimiert">Mehrskalen-Frangi</option><option value="erweitert">Weber-Kontrast</option></select></label>
+<fieldset data-profile="rissoptimiert">
+<legend>Mehrskalen-Frangi</legend>
+<label>Risskontrast <select name="polarity"><option value="dunkel">Dunkel</option><option value="hell">Hell</option></select></label>
+<label>Empfindlichkeit k <input name="sensitivity" type="number" min="0.1" max="5" step="any" value="1" required></label>
+<label>Mindestfläche in px² <input name="min_area" type="number" min="1" max="1000000" value="16" required></label>
+<details><summary>Wie diese Werte wirken</summary><p>Die Polarität legt fest, ob dunkle oder helle Linien gesucht werden. k multipliziert den kombinierten Linien- und Kontrastwert. Die Mindestfläche entfernt kleine Komponenten und beeinflusst die notwendige Skelettgröße. <a href="/assets/methoden.html#frangi">Formel und Beispiel</a></p></details>
+</fieldset>
+<fieldset data-profile="erweitert" hidden disabled>
+<legend>Weber-Kontrast</legend>
+<label>Risskontrast <select name="polarity"><option value="dunkel">Dunkel</option><option value="hell">Hell</option></select></label>
+<label>Empfindlichkeit k <input name="sensitivity" type="number" min="0.1" max="5" step="any" value="1" required></label>
+<label>Mindestfläche in px² <input name="min_area" type="number" min="1" max="1000000" value="16" required></label>
+<details><summary>Wie diese Werte wirken</summary><p>Die Polarität bestimmt, auf welcher Seite des lokalen Hintergrunds gesucht wird. Ein größeres k senkt die relative Kontrastschwelle. Die Mindestfläche wird nach dem morphologischen Schließen geprüft. <a href="/assets/methoden.html#weber">Formel und Beispiel</a></p></details>
+</fieldset>
+<div id="profile-options">
+<details>
+<summary>Kalibrierung und Bildausschnitt</summary>
+<label>Maßstab in µm/px <input name="scale_um" type="number" min="0.00001" max="100000" step="any" placeholder="Leer für TIFF-Automatik"></label>
+<label class="check"><input name="prefer_metadata" type="checkbox"> TIFF-Maßstab vor manuellem Wert verwenden</label>
+<label>Relative Maßstabsunsicherheit in % <input name="scale_uncertainty_pct" type="number" min="0" max="50" step="any" placeholder="Optional"></label>
+<label class="check"><input id="use-roi" type="checkbox"> Rechteckigen Bildausschnitt auswerten</label>
+<fieldset id="roi" disabled hidden>
+<legend>Koordinaten in Pixeln</legend>
+<div class="inputs">
+<label>Links x₀ <input name="x0" type="number" min="0" step="1" value="0" required></label>
+<label>Oben y₀ <input name="y0" type="number" min="0" step="1" value="0" required></label>
+<label>Rechts x₁ <input name="x1" type="number" min="1" step="1" required></label>
+<label>Unten y₁ <input name="y1" type="number" min="1" step="1" required></label>
+</div>
+</fieldset>
+<details><summary>Einheiten, Vorrang und Koordinaten</summary><p>Der Maßstab beschreibt die Kantenlänge eines Pixels. Leer versucht RubberScope TIFF-Metadaten zu lesen. Mit aktiviertem Vorrang dienen manuelle Werte als Rückfallwert. Die Unsicherheit ändert nur abgeleitete Unsicherheitswerte. Die linke obere Bildecke ist (0, 0). Rechts und unten sind exklusive Grenzen. <a href="/assets/methoden.html#kalibrierung">Herleitung und Rechenbeispiel</a></p></details>
+</details>
+<details>
+<summary>Orientierung, Rand und Zusatzanalysen</summary>
+<label>Dehnrichtung in Grad <input name="strain_direction_deg" type="number" min="0" max="179.99999" step="any" placeholder="Leer für keine Richtungsauswertung"></label>
+<label class="check"><input name="exclude_edge_objects" type="checkbox"> Randobjekte ausschließen</label>
+<label class="check"><input name="bright_features" type="checkbox"> Helle Auffälligkeiten erfassen</label>
+<label class="check"><input name="surface_features" type="checkbox"> Reflexionskandidaten und Bildtextur erfassen</label>
+<label class="check"><input name="robustness" type="checkbox"> Robustheit bei 0,8k, k und 1,2k prüfen</label>
+<details><summary>Welche Ergebnisse sich ändern</summary><p>0° ist waagerecht, 90° senkrecht. Der kleinste Achsenwinkel bestimmt den Queranteil. Nur der äußere Bildrand löst den Randausschluss aus. Die Zusatzmasken zeigen helle Strukturen in Orange und Reflexionskandidaten in Magenta. <a href="/assets/methoden.html#zusatz">Schwellenwerte und Grenzen</a></p></details>
+</details>
+<details>
+<summary>Probendaten und Prüfkontext</summary>
+<label>Alterungszustand <select name="sample_state"><option>Unbekannt</option><option>Ungealtert (Referenz)</option><option>Gealtert</option></select></label>
+<label>Proben-ID <input name="sample_id" maxlength="160"></label>
+<label>Vergleichsgruppe <input name="comparison_group" maxlength="160"></label>
+<label>Prüfperson <input name="operator" maxlength="160"></label>
+<label>Prüfbedingungen <input name="test_context" maxlength="160"></label>
+<label>Manuelle Einstufung <input name="manual_rating" maxlength="160"></label>
+<label class="check"><input name="controlled_acquisition" type="checkbox"> Identische Aufnahmebedingungen</label>
+<label class="check"><input name="edge_cracks" type="checkbox"> Randrisse beobachtet</label>
+<details><summary>Was mit diesen Angaben passiert</summary><p>Diese Angaben dokumentieren die Probe im herunterladbaren Ergebnis. Sie beeinflussen weder die Segmentierung noch die Einzelbild-Kennwerte. Der Vermerk „Randrisse beobachtet“ beschreibt die Probe. Den rechnerischen Randausschluss findest du bei den Analyseoptionen.</p></details>
+</details>
+</div>
+<button>Bild auswerten</button>
+</form>
+</section>
+<section aria-labelledby="results-heading">
+<h2 id="results-heading">Ergebnis</h2>
+<p id="status" role="status">Wähle ein Mikroskopbild und starte die Analyse.</p>
+<div id="result" hidden>
+<img id="overlay" alt="Mikroskopbild mit türkis markierten Risskandidaten">
+<dl id="metrics"></dl><div id="robustness"></div><p><a id="result-file" download="rubberscope-ergebnis.json">Kennwerte und Konfiguration herunterladen</a></p>
+<a id="download" download="rubberscope-overlay.png">Überlagerung herunterladen</a>
+<p><small>Explorative Bildkennwerte. Die automatische Segmentierung kann auch ähnliche Bildstrukturen erfassen.</small></p>
+</div>
+</section>
+</div>
+<section class="methods">
+<h2>Formeln und Quellen</h2>
+<p><a href="/assets/methoden.html">Ausführliche Methodenführung mit Rechenbeispielen</a></p>
+<p><a href="/assets/quellen.html">Quellen auf Deutsch erklärt</a> · <a href="/assets/sources.html" lang="en">Sources in English</a></p>
+</section>
+</main>
+</body>
+</html>
+
+
+

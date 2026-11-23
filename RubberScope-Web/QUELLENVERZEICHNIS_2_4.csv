@@ -1,0 +1,27 @@
+﻿Quelle_ID;Bibliografische_Angabe_oder_Originalquelle;URL_oder_DOI;Typ
+Q01;ITU-R BT.601-5 (1995), Studio encoding parameters of digital television. Farbbild-/Luma-Gewichte 0,299/0,587/0,114.;https://www.itu.int/dms_pubrec/itu-r/rec/bt/R-REC-BT.601-5-199510-S!!PDF-E.pdf;Externe Fachquelle
+Q02;OpenCV, Smoothing Images (GaussianBlur): Gauß-Faltung und Vorverarbeitung.;https://docs.opencv.org/4.13.0/dc/dd3/tutorial_gausian_median_blur_bilateral_filter.html;Externe Fachquelle
+Q03;Frangi, A. F. et al. (1998): Multiscale Vessel Enhancement Filtering, MICCAI, S. 130-137. DOI 10.1007/BFb0056195.;https://doi.org/10.1007/BFb0056195;Externe Fachquelle
+Q04;"scikit-image 0.26, filters.frangi und apply_hysteresis_threshold; implementierte Parameter und Schnittstellen.";https://scikit-image.org/docs/0.26.x/api/skimage.filters.html;Externe Fachquelle
+Q05;OpenCV, More Morphology Transformations, Abschnitt Closing und Black Hat.;https://docs.opencv.org/4.10.0/d3/dbe/tutorial_opening_closing_hats.html;Externe Fachquelle
+Q06;"Zhang, T. Y.; Suen, C. Y. (1984): A fast parallel algorithm for thinning digital patterns, CACM 27(3), 236-239. DOI 10.1145/357994.358023.";https://doi.org/10.1145/357994.358023;Externe Fachquelle
+Q07;Kulpa, Z. (1977): Area and perimeter measurement of blobs in discrete binary pictures, CGIP 6, 434-451. DOI 10.1016/S0146-664X(77)80021-X.;https://doi.org/10.1016/S0146-664X(77)80021-X;Externe Fachquelle
+Q08;OpenCV, Image Moments, zentrale Momente und geometrische Bildmerkmale.;https://docs.opencv.org/4.x/d0/d49/tutorial_moments.html;Externe Fachquelle
+Q09;scikit-image 0.26, measure.regionprops, eccentricity und orientation aus zweiten zentralen Momenten.;https://scikit-image.org/docs/0.26.x/api/skimage.measure.html;Externe Fachquelle
+Q10;JCGM 100:2008, Guide to the expression of uncertainty in measurement, Abschnitt 5: Unsicherheitsfortpflanzung. DOI 10.59161/JCGM100-2008E.;https://doi.org/10.59161/JCGM100-2008E;Externe Fachquelle
+Q11;NIST, Statistical Techniques, Kapitel 8: Student-t-Konfidenzintervalle der Mittelwertschaetzung.;https://www.nist.gov/system/files/documents/2019/05/13/section-8-statistics-techniques-20190506.pdf;Externe Fachquelle
+Q12;SciPy, stats.ttest_ind: Welch-t-Test mit equal_var=False.;https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.ttest_ind.html;Externe Fachquelle
+Q13;Holm, S. (1979): A simple sequentially rejective multiple test procedure, Scandinavian Journal of Statistics 6, 65-70.;https://www.ime.usp.br/~abe/lista/pdf4R8xPVzCnX.pdf;Externe Fachquelle
+Q14;"Sokolova, M.; Lapalme, G. (2009): A systematic analysis of performance measures for classification tasks. DOI 10.1016/j.ipm.2009.03.002.";https://doi.org/10.1016/j.ipm.2009.03.002;Externe Fachquelle
+Q15;NIST FIPS 180-4, Secure Hash Standard, SHA-256. DOI 10.6028/NIST.FIPS.180-4.;https://doi.org/10.6028/NIST.FIPS.180-4;Externe Fachquelle
+Q16;ISO 1431-1:2024, Resistance to ozone cracking - Part 1: Static and dynamic strain testing. Nur fachliche Orientierung, keine Konformitaet.;https://www.iso.org/standard/86601.html;Externe Fachquelle
+Q17;van der Walt et al. (2014): scikit-image: image processing in Python, PeerJ 2:e453. DOI 10.7717/peerj.453.;https://doi.org/10.7717/peerj.453;Externe Fachquelle
+R01;"RubberScope 2.4, Eigenimplementierung: rubberscope_engine.py, _to_uint8(), read_img(), metadata_scale(). Zahlenwahl anhand Eingabedaten bzw. Programmlogik; nicht extern standardisiert.";;Eigenimplementierung
+R02;RubberScope 2.4, Eigenimplementierung: rubberscope_engine.py, smooth_background(), contrast_mask(), crack_features(). Sigma-Festlegungen, Schwellen C_min und k sind projektspezifisch.;;Eigenimplementierung
+R03;RubberScope 2.4, Eigenimplementierung: rubberscope_engine.py, crack_features(), crack_optimized_mask(), make_mask(). Kombination V/C, Auswahl von Skalen und Hysteresegrenzen sind projektspezifisch.;;Eigenimplementierung
+R04;RubberScope 2.4, Eigenimplementierung: rubberscope_engine.py, components(), shape_moments(), measure_objects(), _summarize(). Geometrische Kennwertdefinitionen und Filterkonstanten.;;Eigenimplementierung
+R05;RubberScope 2.4, Eigenimplementierung: rubberscope_engine.py, chain_counts(), skeleton_length(), feret_max(). Konkrete digitale Kantenzaehlung und +1-px-Feret-Korrektur.;;Eigenimplementierung
+R06;RubberScope 2.4, Eigenimplementierung: rubberscope_engine.py, angle_to_axis(), PERPENDICULAR_MIN_DEG, _crack_metrics_from_mask(). Winkelgrenze 60 Grad ist projektspezifisch.;;Eigenimplementierung
+R07;RubberScope 2.4, Eigenimplementierung: rubberscope_engine.py, _stats(), group_statistics(), group_tests(). Statistik nach Bilddaten, nicht zwingend unabhaengige Pruefkoerper.;;Eigenimplementierung
+R08;"RubberScope 2.4, Eigenimplementierung: rubberscope_engine.py, validate_reference_set() / selftest(); rubberscope_berichte.py, validate_real_reference_set(). Definition der Referenzpruefungen.";;Eigenimplementierung
+R09;RubberScope 2.4, Eigenimplementierung: rubberscope_berichte.py, rechenprotokoll(). Algebraische Einsetzungen mit Roh-/Objektkennwerten, Rundungsdifferenzen moeglich.;;Eigenimplementierung

@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="de">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RubberScope · Methodenführung</title><link rel="stylesheet" href="/assets/style.css"></head>
+<body><main><article>
+<a href="/">Zur Analyse</a>
+<h1>Vom Mikroskopbild zum Kennwert</h1>
+<nav aria-label="Kapitel"><a href="#eingabe">Bildeingang</a><a href="#frangi">Frangi</a><a href="#weber">Weber</a><a href="#geometrie">Geometrie</a><a href="#kalibrierung">Kalibrierung</a><a href="#zusatz">Zusatzanalysen</a><a href="#validierung">Validierung</a><a href="/assets/quellen.html">Quellen DE</a><a href="/assets/sources.html" lang="en">Sources EN</a></nav>
+<section>
+<details id="eingabe" open><summary>Bildeingang, Graustufen und Polarität</summary>
+<p>Die Formeln arbeiten mit 8-Bit-Grauwerten von 0 bis 255. RGB wird über Y ≈ 0,299R + 0,587G + 0,114B gewichtet. Bei ganzzahligen Bildern mit mehr als 8 Bit verwendet der Code 4.095 als Referenzmaximum, wenn der größte beobachtete Wert höchstens 4.095 beträgt, sonst 65.535. Er rundet I × 255 / Referenzmaximum und begrenzt auf 0 bis 255. Gleitkomma-TIFF wird pro Bild mit (I − min I) / (max I − min I) normiert. Bei einem konstanten Bild verhindert ein kleiner Mindestnenner die Division durch null. Die Normierung kann die Vergleichbarkeit zwischen Aufnahmen verändern.</p>
+<p>Beim Standard „Dunkel“ wird eine dunkle Struktur vor hellerem lokalem Hintergrund gesucht. Für helle Risse arbeitet die Segmentierung mit 255 − I. Originalbild und helle Zusatzmasken behalten ihre ursprüngliche Polarität.</p>
+<p><a href="/assets/quellen.html#grau">Quellen zu Graubild und Vorverarbeitung</a></p>
+</details>
+<details id="frangi" open><summary>Mehrskalen-Frangi · Hessian, Score und Hysterese</summary>
+<ol>
+<li>Glätte mit einem 3×3-Gaußfilter (σ = 0,65 px) zu I. Schätze den Hintergrund B als Gauß-Faltung mit σ = max(8, min(Bildhöhe, Bildbreite)/22) und setze B mindestens auf 1 Graustufe. Bei großem σ berechnet die Engine den Hintergrund auf einer verkleinerten Kopie und interpoliert ihn zurück.</li>
+<li>Bilde D = clip(1 − I/B, 0, 1). Eine dunkle Linie erscheint als positiver Grat. Für σ = 1, 1,6, 2,5 und 3,5 px untersucht Frangi die Eigenwerte der Hesse-Matrix aus den zweiten Ableitungen von D. Eine Linie hat wenig Krümmung entlang der Achse und hohe Krümmung quer dazu.</li>
+<li>Für die passende Gratpolarität ergibt sich in 2D näherungsweise Vσ = exp(−R²/(2β²)) · [1 − exp(−S²/(2γ²))], mit R = |λ₁|/|λ₂| bei nach Betrag sortierten Eigenwerten und S = √(λ₁² + λ₂²). β = 0,5 gewichtet die Linienform und γ = 0,05 die Strukturstärke. Der größte Wert über die vier Skalen liefert V.</li>
+<li>Die lokale Tiefe BH ist das Maximum der morphologischen Black-Hat-Antworten über elliptische Strukturelemente mit 9, 17 und 27 px. Black Hat ist das geschlossene Bild minus das Eingangsbild. C = BH/B normiert diese Tiefe auf den lokalen Hintergrund.</li>
+<li>Score = max(0,2, k) × min(V/0,25, C/0,15). Das Minimum verlangt sowohl Linienform als auch Kontrast. Die Hysterese behält Bereiche mit Score &gt; 0,5, sofern sie mit einem Pixel mit Score &gt; 1,0 verbunden sind. Bei V = 0,30, C = 0,18 und k = 1 beträgt der Score 1,20. Bei k = 0,8 beträgt er 0,96. Das Pixel kann dann nur über einen stärkeren Nachbarn Teil der Maske werden.</li>
+<li>Die Engine entfernt Komponenten unter Aₘᵢₙ und prüft danach die Anzahl der Skelettpixel. Sie muss mindestens max(12, 2,5√Aₘᵢₙ) betragen. Zusätzlich ist eine Exzentrizität von mindestens 0,68 oder ein Skelett mit mindestens 40 Pixeln erforderlich. Bei Aₘᵢₙ = 64 liegt die Skelettschwelle bei 20 Pixeln.</li>
+</ol>
+<p><a href="/assets/quellen.html#frangi">Quellen zu Frangi, Hysterese und Black Hat</a></p>
+</details>
+<details id="weber" open><summary>Weber-Kontrast · Hintergrund, Schwelle und Formfilter</summary>
+<ol>
+<li>Glätte das Graubild mit einem 3×3-Gaußfilter. Schätze B mit σ = max(9, ⌊min(H,W)/18⌋) px und begrenze B nach unten auf 1. Das Verfahren braucht mindestens 30 × 30 Pixel.</li>
+<li>Berechne den relativen Intensitätsabfall C = clip((B − I)/B, 0, 1) und glätte ihn ebenfalls mit 3×3. Bei B = 160 und I = 136 ergibt sich vor der zweiten Glättung C = 24/160 = 0,15.</li>
+<li>Die Schwelle ist 0,12/max(0,2, k). Bei k = 1 gilt 12 %, bei k = 1,5 gelten 8 %. Ein höheres k kann mehr schwache Strukturen sowie Hintergrundartefakte erfassen.</li>
+<li>Ein morphologisches Schließen mit einer 3×3-Ellipse kann nahe Bereiche verbinden. Danach entfernt die Engine Komponenten mit weniger als Aₘᵢₙ Pixeln. Die aus Momenten geschätzte Hauptachse muss mindestens 20 px betragen. Zusätzlich muss die Exzentrizität mindestens 0,68 oder die Hauptachse mindestens 40 px betragen.</li>
+</ol>
+<p><a href="/assets/quellen.html#weber">Quellen zu Glättung, Morphologie und Momenten</a></p>
+</details>
+<details id="geometrie" open><summary>Vom Binärbild zu Länge, Breite und Orientierung</summary>
+<p>Die Segmentierung läuft auf dem gesamten Bild. Danach beschränkt die ROI die Maske auf x₀ ≤ x &lt; x₁ und y₀ ≤ y &lt; y₁. Übrige Objekte werden über 8-Nachbarschaft gebildet. Eine ROI kann Objekte schneiden. Die Mindestfläche wurde bereits vor diesem Schnitt geprüft. Bei aktivem Randausschluss fallen Objekte weg, die den äußeren Bildrand berühren. Die ROI-Fläche bleibt beim Randausschluss gleich.</p>
+<p>Für ein Objekt mit Pixelmittelpunkt (x̄, ȳ) berechnet RubberScope die normierten zweiten zentralen Momente aus den Mittelwerten von (x − x̄)², (y − ȳ)² und (x − x̄)(y − ȳ). Die Eigenwerte λ₁ ≥ λ₂ der 2×2-Momentenmatrix liefern Haupt- und Nebenachse 4√λ₁ und 4√λ₂ in px sowie e = √(1 − λ₂/λ₁). e ist bei einer kreisförmigen Punktverteilung nahe 0 und bei einer Linie nahe 1. Die Hauptachsenrichtung ist θ = −½ atan2(2μ₁₁, μ₂₀ − μ₀₂), in Grad modulo 180. Das Minus berücksichtigt, dass Bild-y nach unten wächst.</p>
+<p>Die Skelettierung dünnt die Maske bis auf eine digitale Mittellinie aus. Zähle orthogonale Kanten nₑ und diagonale Kanten nₒ, wobei eine Diagonale mit orthogonaler Ersatzverbindung entfällt. Die geometrischen Schrittgewichte sind 1 und √2. Der Kulpa-Faktor π(1 + √2)/8 korrigiert den mittleren Richtungsfehler bei isotroper Ausrichtung. Damit gilt L = π(1 + √2)/8 × (nₑ + √2 nₒ). Für nₑ = 40, nₒ = 20 ergibt sich L ≈ 64,74 px. Ein digitaler Schätzer bleibt von Auflösung, Segmentierung und Verzweigungen abhängig.</p>
+<p>Für Objektflächen Aᵢ und Längen Lᵢ beträgt die mittlere Breite ΣAᵢ/ΣLᵢ. Aus wᵢ = Aᵢ/Lᵢ folgt Σ(Lᵢwᵢ)/ΣLᵢ. Längere Objekte zählen dadurch stärker. Bei ΣLᵢ = 0 bleibt die zusammengefasste Breite leer. Objektintern gilt die lokale Breite am Skelett als 2d − 1, wobei d der euklidische Abstand zum nächsten Hintergrundpixel ist. Das Maximum liefert die EDT-Maximalbreite im Engine-Ergebnis.</p>
+<p>Mit Dehnachse α berechnet die Engine d = |θ − α| mod 180° und reduziert auf min(d, 180° − d). Als quer zählen Winkel ab 60°. Der Queranteil ist 100 × Summe der quer liegenden Skelettlängen / Summe aller Skelettlängen. Beispiel: 30 px quer von 120 px gesamt ergeben 25 %.</p>
+<p><a href="/assets/quellen.html#geometrie">Quellen zu Momenten, Skelettierung und Kulpa</a></p>
+</details>
+<details id="kalibrierung" open><summary>Maßstab, Bezugsfläche und Unsicherheitsfortpflanzung</summary>
+<p>s bezeichnet die Pixelkante in µm/px. RubberScope setzt für x und y denselben Wert voraus. Geprüft werden OME PhysicalSizeX und definierte TIFF-Beschreibungsfelder wie pixel_size_um. Die Engine rechnet eindeutige Einheiten wie nm und mm in µm um. DPI gelten als Druckangaben. Ein manueller Wert hat standardmäßig Vorrang. Mit aktivem Metadatenvorrang dient er als Rückfallwert.</p>
+<ul>
+<li>Bei N ausgewerteten Pixeln ist die Bezugsfläche A = N × s² / 10⁶ mm². Ohne Kalibrierung steht sie in px² zur Verfügung.</li>
+<li>Der maskierte Flächenanteil ist φ = 100 × Nₘₐₛₖₑ / N. Der Maßstab kürzt sich, da Zähler und Nenner dieselbe Pixelgröße verwenden.</li>
+<li>Die Objektdichte ist n/A in 1/mm². Die Gesamtlänge ist ΣLᵢ × s/1.000 in mm. Daraus folgt die Längendichte ρ = 1.000 × ΣLᵢ/(N × s) in mm/mm².</li>
+<li>Bei s = 2 µm/px, N = 10.000 und ΣLᵢ = 100 px gilt A = 0,04 mm² und L = 0,2 mm. Also ist ρ = 5 mm/mm². Mit 200 maskierten Pixeln beträgt φ = 2 % und die mittlere Breite 200/100 × 2 = 4 µm.</li>
+<li>Für y ∝ sᵖ gilt in erster Ordnung uᵣ(y) ≈ |p|uᵣ(s). Die Fläche hat p = 2, die Längendichte p = −1. Bei 1 % relativer Maßstabsunsicherheit ergeben sich 2 % für die Fläche und 1 % für die Längendichte. Das erfasst allein den Beitrag der Kalibrierung. Schwankungen durch Aufnahme und Segmentierung sind darin nicht enthalten.</li>
+</ul>
+<p><a href="/assets/quellen.html#unsicherheit">Quellen zur Kalibrierunsicherheit</a></p>
+</details>
+<details id="zusatz" open><summary>Helle Auffälligkeiten, Reflexionen und Robustheit</summary>
+<ul>
+<li>Helle Auffälligkeiten verwenden einen positiven Grauwertüberschuss über dem lokalen Hintergrund von mindestens 18/max(0,3, k). Der Hintergrund wird nach Maskierung der Rissumgebung mit einem Gaußfilter geschätzt. Auf die Schwellenmaske folgen eine 3×3-Öffnung, ein Ausschluss der unmittelbaren Rissumgebung und die Prüfung der Mindestfläche.</li>
+<li>Reflexionskandidaten brauchen mindestens 200 von 255 Graustufen und einen lokalen Überschuss von 20/max(0,3, k). Öffnung, Rissumgebung und Mindestfläche filtern die Maske. Median, p95 und p99 beschreiben die Helligkeitsverteilung des gesamten Bildes. Die Bildtextur ist der quadratische Mittelwert der Abweichung vom mit σ = 3 px geglätteten Bild, als RMS in Graustufen angegeben. Diese Ausgaben sind aufnahmeabhängige Heuristiken.</li>
+<li>Die Robustheitsprüfung berechnet die Rohmaske bei 0,8k, k und 1,2k. Für jede Variante ergeben sich Flächenanteil und bei vorhandener Kalibrierung Längendichte. Relative Änderung = 100 × (Variante/Basis − 1). Bei Basiswert 0 bleibt diese Änderung leer. Die Prüfreihe nutzt die ROI und die Rohmaske vor Randausschluss. Ihre Basis kann deshalb von der Hauptausgabe abweichen.</li>
+</ul>
+</details>
+<details id="validierung" open><summary>Wie du Einstellungen und Ergebnisse vergleichst</summary>
+<p>Für einen Bildvergleich kalibriere die Aufnahmen, dokumentiere die Aufnahmebedingungen und halte Verfahren, Polarität, k und Mindestfläche vergleichbar. Prüfe die türkisfarbene Überlagerung auf unterbrochene Linien, verbundene Nachbarobjekte und falsch segmentierte Kratzer. Vergleiche Varianten gegen manuell annotierte Referenzbilder. Precision = TP/(TP + FP) beschreibt den Anteil korrekter positiver Pixel und Recall = TP/(TP + FN) den erkannten Anteil der Referenzpixel. F1 = 2 × Precision × Recall/(Precision + Recall). Ein hoher F1-Wert zeigt Übereinstimmung mit der gewählten Annotation. Für andere Aufnahmen bleibt eine eigene Prüfung sinnvoll.</p>
+<p>Die Schwellenwerte und Formregeln sind Eigenimplementierungen von RubberScope 2.4. Die gezeigten Bildkennwerte dienen der explorativen Auswertung. Normprüfungen nach ISO 1431-1 haben eigene Vorgaben.</p>
+</details>
+</section>
+</article></main></body></html>

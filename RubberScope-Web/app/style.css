@@ -1,0 +1,35 @@
+:root { color-scheme: dark; font-family: system-ui, sans-serif; background: #10191c; color: #e8f1ef; }
+* { box-sizing: border-box; }
+main { margin: auto; max-width: 76rem; padding: clamp(1rem, 5vw, 4rem); }
+header { padding-block: 1rem 2rem; }
+header span, a { color: #74dec8; }
+h1 { font-size: clamp(2rem, 5vw, 3.6rem); margin: .3em 0; letter-spacing: -.04em; line-height: 1.02; }
+h2 { margin-top: 0; }
+p, small { color: #b8cac8; line-height: 1.55; }
+.workspace { display: grid; grid-template-columns: minmax(16rem, 2fr) minmax(0, 3fr); gap: 1rem; }
+section { background: #172427; border: 1px solid #34484a; border-radius: 1rem; padding: clamp(1rem, 3vw, 2rem); }
+form, label { display: grid; gap: .5rem; }
+form { gap: 1rem; }
+.inputs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .7rem; }
+input, select, button { width: 100%; padding: .65rem; border-radius: .5rem; border: 1px solid #637d7d; background: #10191c; color: inherit; font: inherit; }
+button { background: #74dec8; color: #102522; border: 0; font-weight: 700; cursor: pointer; }
+button:disabled { opacity: .6; cursor: wait; }
+img { display: block; max-width: 100%; max-height: 34rem; border-radius: .4rem; }
+dl { display: grid; grid-template-columns: 1fr auto; gap: .6rem; }
+dd { margin: 0; text-align: right; }
+.methods { margin-top: 1rem; }
+details { border-top: 1px solid #34484a; padding: .85rem 0; }
+summary { cursor: pointer; font-weight: 600; }
+@media (max-width: 45rem) { .workspace { grid-template-columns: minmax(0, 1fr); } }
+fieldset { min-width: 0; border: 1px solid #34484a; border-radius: .55rem; padding: .85rem; }
+fieldset:not([hidden]) { display: grid; gap: .75rem; }
+details > label, details > fieldset { margin-top: .8rem; }
+label.check { display: flex; align-items: baseline; gap: .65rem; }
+label.check input { width: auto; flex: none; }
+nav { display: flex; flex-wrap: wrap; gap: 1rem; margin: 1rem 0; }
+article { max-width: 52rem; }
+article details { border-color: #526768; }
+table { width: 100%; border-collapse: collapse; }
+th, td { text-align: left; padding: .5rem; border-bottom: 1px solid #34484a; }
+.scroll-table { overflow-x: auto; }
+#profile-options { display: grid; gap: .25rem; }

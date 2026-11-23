@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: rubberscope-web
+    runtime: docker
+    plan: free
+    region: frankfurt
+    envVars:
+      - key: RUBBERSCOPE_PASSWORD
+        sync: false
