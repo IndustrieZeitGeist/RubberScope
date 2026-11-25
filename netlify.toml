@@ -1,0 +1,4 @@
+# Netlify: statische Web-Version (Pyodide), kein Build nötig
+[build]
+  publish = "web"
+  command = ""

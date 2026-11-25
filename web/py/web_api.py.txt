@@ -1,0 +1,660 @@
+"""RubberScope Web – Brücke zwischen Browser-Oberfläche (JavaScript) und Rechenkern.
+
+Läuft in Pyodide (Python/WebAssembly) vollständig im Browser des Nutzers.
+Keine Bilddaten verlassen den Rechner. Alle Rechenschritte stammen unverändert aus
+rubberscope_engine.py / rubberscope_berichte.py; hier wird nur verwaltet und kodiert.
+"""
+from __future__ import annotations
+
+import io
+import json
+import math
+import re
+import time
+import zipfile
+from pathlib import Path
+
+import cv2
+import numpy as np
+
+import rubberscope_engine as eng
+import rubberscope_berichte as ber
+
+WORK = Path('/rs_work')
+IN = WORK / 'eingang'
+IN.mkdir(parents=True, exist_ok=True)
+STORE: dict[str, dict] = {}          # key -> {'path','result','params','ann'}
+MAX_PIXELS_WARN = 12_000_000
+
+
+# ----------------------------------------------------------------------------- Hilfen
+def _jsonable(o):
+    if isinstance(o, dict):
+        return {str(k): _jsonable(v) for k, v in o.items()}
+    if isinstance(o, (list, tuple)):
+        return [_jsonable(v) for v in o]
+    if isinstance(o, (np.integer,)):
+        return int(o)
+    if isinstance(o, (np.floating,)):
+        v = float(o)
+        return v if math.isfinite(v) else None
+    if isinstance(o, float):
+        return o if math.isfinite(o) else None
+    if isinstance(o, (np.bool_,)):
+        return bool(o)
+    if isinstance(o, np.ndarray):
+        return o.tolist()
+    if isinstance(o, Path):
+        return str(o)
+    return o
+
+
+def _dump(o):
+    return json.dumps(_jsonable(o), ensure_ascii=False)
+
+
+def _enc(rgb, fmt='.jpg', q=90):
+    bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR) if rgb.ndim == 3 else rgb
+    params = [cv2.IMWRITE_JPEG_QUALITY, q] if fmt == '.jpg' else [cv2.IMWRITE_PNG_COMPRESSION, 3]
+    ok, buf = cv2.imencode(fmt, bgr, params)
+    if not ok:
+        raise RuntimeError('Bildkodierung fehlgeschlagen')
+    return buf.tobytes()
+
+
+def _safe(name):
+    return re.sub(r'[^A-Za-z0-9._-]', '_', name)[-80:] or 'bild'
+
+
+# ----------------------------------------------------------------------------- Basis
+def info():
+    env = eng.environment_info()
+    chk = eng.frangi_equivalence_check()
+    return _dump({'env': env, 'frangi_check': chk, 'version': eng.VERSION,
+                  'classes': eng.CLASS_OPTIONS, 'non_crack': sorted(eng.NON_CRACK_CLASSES),
+                  'param_spec': list(eng.PARAM_INFO.values()), 'param_defaults': eng.DEFAULT_PARAMS,
+                  'k_grid_default': {a: list(g) for a, g in eng.VALIDATION_K_GRID.items()}})
+
+
+def check_params(params_json):
+    """Prüft einen Parametersatz; liefert {'ok', 'params', 'changed', 'hash'} oder {'ok': False, 'error'}."""
+    try:
+        mp = eng.resolve_params(json.loads(params_json or '{}'))
+    except ValueError as e:
+        return _dump({'ok': False, 'error': str(e)})
+    return _dump({'ok': True, 'params': mp, 'changed': eng.changed_params(mp), 'hash': eng.params_hash(mp)})
+
+
+def params_from_file(text):
+    """Liest einen Parametersatz aus einer gespeicherten Voreinstellung oder einer auswertungsparameter.json."""
+    d = json.loads(text)
+    cand = None
+    if isinstance(d, dict) and 'rubberscope_methodenparameter' in d:
+        cand = d['rubberscope_methodenparameter']
+    elif isinstance(d, dict) and 'methodenparameter_saetze' in d:
+        sets = d['methodenparameter_saetze']
+        if len(sets) > 1:
+            raise ValueError(f'Die Datei enthält {len(sets)} Parametersätze – bitte eine Voreinstellung mit nur einem Satz verwenden.')
+        cand = next(iter(sets.values()))['parameter']
+    elif isinstance(d, dict) and set(d) <= set(eng.PARAM_INFO):
+        cand = d
+    if cand is None:
+        raise ValueError('Keine RubberScope-Methodenparameter in der Datei gefunden.')
+    extra = {k: d.get(k) for k in ('name', 'beschreibung', 'k', 'algorithmus', 'a_min') if isinstance(d, dict) and k in d}
+    mp = eng.resolve_params(cand)
+    return _dump({'params': mp, 'changed': eng.changed_params(mp), 'hash': eng.params_hash(mp), 'meta': extra})
+
+
+def put_file(key, name, data):
+    """Bytes (aus JS) als Datei ablegen; Pfad behält Originalnamen (für Protokoll/SHA-256)."""
+    if hasattr(data, 'to_py'):          # Pyodide: Uint8Array aus JavaScript
+        data = data.to_py()
+    folder = IN / _safe(key)
+    folder.mkdir(parents=True, exist_ok=True)
+    p = folder / _safe(name)
+    p.write_bytes(bytes(data))
+    STORE.setdefault(key, {})['path'] = str(p)
+    rgb, gray, inf = eng.read_img(p)
+    h, w = gray.shape
+    scale, src = eng.metadata_scale(p)
+    STORE[key]['preview'] = rgb
+    return _dump({'width': w, 'height': h, 'conversion': inf['conversion'], 'note': inf['note'],
+                  'meta_scale': scale, 'meta_scale_source': src,
+                  'large': w * h > MAX_PIXELS_WARN})
+
+
+def preview(key):
+    """Originalbild als JPEG (für die Anzeige, z. B. bei TIFF, das der Browser nicht darstellt)."""
+    return _enc(STORE[key]['preview'])
+
+
+def remove(key):
+    STORE.pop(key, None)
+    return 'ok'
+
+
+# ----------------------------------------------------------------------------- Analyse
+PARAM_KEYS = ('scale_um', 'polarity', 'sensitivity', 'min_area', 'roi', 'algorithm', 'sample_state',
+              'comparison_group', 'sample_id', 'operator', 'test_context', 'manual_rating', 'bright_features',
+              'surface_features', 'controlled_acquisition', 'strain_direction_deg', 'exclude_edge_objects',
+              'scale_uncertainty_pct', 'robustness')
+
+
+def _view(key):
+    st = STORE[key]
+    r = st['result']
+    v = r['summary']
+    objs = r['objects']
+    keep_keys = ('id', 'x_px', 'y_px', 'area_px2', 'skeleton_length_px', 'skeleton_length_um', 'mean_width_px',
+                 'mean_width_um', 'width_area_px', 'width_area_um', 'width_method_used', 'width_profiles_n',
+                 'max_width_edt_px', 'max_width_edt_um', 'eccentricity', 'orientation_deg',
+                 'angle_to_strain_deg', 'feret_max_px', 'feret_max_um', 'edge_touching', 'classification',
+                 'overlap_decision', 'chain_n_e', 'chain_n_o', 'area_um2')
+    return {'summary': v, 'objects': [{k: o.get(k) for k in keep_keys if k in o} for o in objs],
+            'decisions': r.get('manual_overlap_decisions', []),
+            'profile': r.get('optical_profile')}
+
+
+def analyze(key, params_json):
+    p = json.loads(params_json)
+    st = STORE[key]
+    kw = {k: p[k] for k in PARAM_KEYS if k in p and p[k] not in ('', None)}
+    kw['method_params'] = p.get('method_params') or None
+    if 'scale_um' in kw:
+        kw['scale_um'] = float(kw['scale_um'])
+    t0 = time.perf_counter()
+    r = eng.analyze(st['path'], mode='riss', **kw)
+    st['result'] = r
+    st['params'] = kw
+    ann = st.get('ann')
+    if ann:
+        _apply(key, ann)
+    out = _view(key)
+    out['runtime_total_s'] = round(time.perf_counter() - t0, 2)
+    return _dump(out)
+
+
+def _apply(key, ann):
+    st = STORE[key]
+    r = st['result']
+    eng.apply_editor_annotations(r, [tuple(b) for b in ann.get('exclusions', [])], ann.get('labels', []),
+                                 ann.get('overlap', []))
+    prof = ann.get('profile')
+    if prof:
+        r['optical_profile'] = eng.optical_profile(r['original'], prof[0], prof[1], r['summary']['scale_um_per_px'])
+    else:
+        r.pop('optical_profile', None)
+    st['ann'] = ann
+
+
+def annotate(key, ann_json):
+    _apply(key, json.loads(ann_json))
+    return _dump(_view(key))
+
+
+def image(key, kind='overlay'):
+    r = STORE[key]['result']
+    if kind == 'overlay':
+        return _enc(r['overlay'])
+    if kind == 'mask':
+        m = np.zeros(r['mask'].shape + (3,), np.uint8)
+        m[r['mask']] = (16, 224, 207)
+        m[r['excluded_mask'] & ~r['mask']] = (90, 30, 30)
+        return _enc(m, '.png')
+    if kind == 'original':
+        return _enc(r['original'])
+    raise ValueError(kind)
+
+
+def object_info(key, x, y, radius=15):
+    r = STORE[key]['result']
+    oid = eng.object_at(r['labels'], x, y, int(radius))
+    if not oid:
+        return _dump({'id': 0})
+    o = next((o for o in r['objects_all'] if o['id'] == oid), None)
+    active = next((o for o in r['objects'] if o['id'] == oid), None)
+    ys, xs = np.nonzero(r['labels'] == oid)
+    return _dump({'id': oid, 'object': o, 'active': active is not None,
+                  'classification': (active or {}).get('classification'),
+                  'bbox': [int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1]})
+
+
+def touching(key, box_json):
+    r = STORE[key]['result']
+    ids = sorted(eng.objects_touching_exclusions(r['labels'], [json.loads(box_json)]))
+    pts = []
+    for oid in ids:
+        ys, xs = np.nonzero(r['labels'] == oid)
+        i = len(xs) // 2
+        o = next((o for o in r['objects_all'] if o['id'] == oid), {})
+        pts.append({'id': oid, 'x': int(xs[i]), 'y': int(ys[i]), 'length_px': o.get('skeleton_length_px'),
+                    'angle': o.get('orientation_deg')})
+    return _dump(pts)
+
+
+def object_mask_png(key, oid):
+    """Einzelobjekt als halbtransparente Hervorhebung (RGBA-PNG, gleiche Größe wie das Bild)."""
+    r = STORE[key]['result']
+    m = r['labels'] == int(oid)
+    rgba = np.zeros(m.shape + (4,), np.uint8)
+    k = np.ones((5, 5), np.uint8)
+    ring = cv2.dilate(m.astype(np.uint8), k) > 0
+    rgba[ring] = (255, 235, 59, 255)
+    rgba[m] = (255, 120, 0, 255)
+    ok, buf = cv2.imencode('.png', cv2.cvtColor(rgba, cv2.COLOR_RGBA2BGRA))
+    return buf.tobytes()
+
+
+# ----------------------------------------------------------------------------- Mehrere Bilder
+def _results(keys):
+    return [STORE[k]['result'] for k in keys if k in STORE and 'result' in STORE[k]]
+
+
+def _session(params_json):
+    """Sitzungsparameter (v. a. Statistik) für gruppenübergreifende Berechnungen."""
+    return eng.use_params(json.loads(params_json) if params_json else None)
+
+
+def statistics(keys_json, params_json=None):
+    keys = json.loads(keys_json)
+    res = _results(keys)
+    if not res:
+        return _dump({})
+    with _session(params_json):
+        eng.compare_to_unaged(res)
+        groups, tests = eng.group_statistics(res), eng.group_tests(res)
+    return _dump({'groups': groups, 'tests': tests,
+                  'metric_keys': eng.metric_keys(res), 'param_sets': len(eng.param_sets(res)),
+                  'refs': {k: {kk: vv for kk, vv in STORE[k]['result']['summary'].items() if kk.startswith('reference_')}
+                           for k in keys if k in STORE and 'result' in STORE[k]}})
+
+
+def compare(key_a, key_b):
+    return _dump(eng.pair_comparison(STORE[key_a]['result'], STORE[key_b]['result']))
+
+
+# ----------------------------------------------------------------------------- Export
+def export_zip(keys_json, conditions_json, options_json, params_json=None):
+    with _session(params_json):
+        return _export_zip(keys_json, conditions_json, options_json, params_json)
+
+
+def _export_zip(keys_json, conditions_json, options_json, params_json):
+    keys = json.loads(keys_json)
+    cond = json.loads(conditions_json or '{}')
+    opt = json.loads(options_json or '{}')
+    res = _results(keys)
+    if not res:
+        raise ValueError('Keine ausgewerteten Bilder.')
+    eng.compare_to_unaged(res)
+    out = WORK / ('export_' + str(int(time.time() * 1000)))
+    out.mkdir(parents=True)
+    for r in res:
+        eng.export_result(r, out)
+    eng.export_tables(res, out, cond)
+    comps = []
+    for a, b in opt.get('pairs', []):
+        if a in STORE and b in STORE:
+            comps.append(eng.pair_comparison(STORE[a]['result'], STORE[b]['result']))
+    groups_info = opt.get('groups_info') or None
+    files = []
+    if opt.get('pdf', True):
+        files.append(eng.pdf_report(res, out, opt.get('title') or 'Mikroskopische Bildanalyse – Prüfprotokoll',
+                                    comparisons=comps or None, conditions=cond, groups_info=groups_info))
+    if opt.get('rechenprotokoll', True):
+        files.append(ber.rechenprotokoll(res, out))
+    if opt.get('validierung', False):
+        val = eng.validate_reference_set(out / 'validierung', opt.get('k_grid'), json.loads(params_json) if params_json else None)
+        files.append(ber.validierungsprotokoll(val, out))
+    corr = {Path(STORE[k]['path']).name: STORE[k].get('ann', {}) for k in keys if k in STORE}
+    (out / 'manuelle_korrekturen.json').write_text(json.dumps(corr, ensure_ascii=False, indent=2), encoding='utf-8')
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as z:
+        for f in sorted(out.rglob('*')):
+            if f.is_file():
+                z.write(f, f.relative_to(out).as_posix())
+    return buf.getvalue()
+
+
+def single_pdf(keys_json, conditions_json, which='pruef', params_json=None):
+    with _session(params_json):
+        return _single_pdf(keys_json, conditions_json, which)
+
+
+def _single_pdf(keys_json, conditions_json, which='pruef'):
+    """Nur ein PDF (für die Vorschau im Browser)."""
+    keys = json.loads(keys_json)
+    res = _results(keys)
+    eng.compare_to_unaged(res)
+    out = WORK / ('pdf_' + str(int(time.time() * 1000)))
+    if which == 'rechen':
+        p = ber.rechenprotokoll(res, out)
+    else:
+        p = eng.pdf_report(res, out, conditions=json.loads(conditions_json or '{}'))
+    return Path(p).read_bytes()
+
+
+def validation(k_grid_json='null', params_json=None):
+    out = WORK / ('val_' + str(int(time.time() * 1000)))
+    t0 = time.perf_counter()
+    mp = json.loads(params_json) if params_json else None
+    rep = eng.validate_reference_set(out, json.loads(k_grid_json or 'null'), mp)
+    pdf = ber.validierungsprotokoll(rep, out)
+    imgs = {}
+    for i in (1, 5):
+        im = cv2.imread(str(out / f'referenz_{i:02d}.png'), cv2.IMREAD_GRAYSCALE)
+        gt = cv2.imread(str(out / f'referenz_{i:02d}_maske.png'), cv2.IMREAD_GRAYSCALE) > 0
+        with eng.use_params(mp):
+            m = eng.make_mask(im, 'riss', 'dunkel', rep['scores']['rissoptimiert']['sensitivity'], 12, 'rissoptimiert')
+        vis = np.dstack([im] * 3).astype(np.float32) * .55
+        vis[m & gt] = (40, 200, 90)
+        vis[m & ~gt] = (235, 60, 60)
+        vis[~m & gt] = (60, 120, 255)
+        imgs[f'referenz_{i:02d}'] = _b64(_enc(vis.astype(np.uint8), '.png'))
+    rep['images'] = imgs
+    rep['runtime_s'] = round(time.perf_counter() - t0, 2)
+    STORE['__val_pdf'] = {'pdf': Path(pdf).read_bytes()}
+    return _dump(rep)
+
+
+def validation_pdf():
+    return STORE['__val_pdf']['pdf']
+
+
+def _b64(b):
+    import base64
+    return base64.b64encode(b).decode('ascii')
+
+
+# ----------------------------------------------------------------------------- Lernmodul
+def _cmap(arr, lo, hi, cmap=cv2.COLORMAP_VIRIDIS):
+    a = np.clip((np.asarray(arr, np.float32) - lo) / max(hi - lo, 1e-9), 0, 1)
+    c = cv2.applyColorMap((a * 255).astype(np.uint8), cmap)
+    return cv2.cvtColor(c, cv2.COLOR_BGR2RGB)
+
+
+def demo_image(kind='B'):
+    """Erzeugt ein synthetisches Demobild (wie im Systemtest) und lädt es als Schlüssel 'demo_<kind>'."""
+    files = eng.create_demo(WORK / 'demo')
+    want = {'B': 'B_ohne_Schutzmittel_gealtert_1', 'A': 'A_mit_Schutzmittel_gealtert_1',
+            'R': 'B_ohne_Schutzmittel_ungealtert'}[kind]
+    f = next(x for x in files if want in x['path'])
+    return Path(f['path']).read_bytes()
+
+
+def lern_image():
+    """Lernbild: synthetische Ozonrisse (quer zur waagerechten Dehnung) + Poren + eine Riefe parallel
+    zur Dehnung + Helligkeitsverlauf. Ground Truth wird mitgeliefert. Kein Realbild."""
+    rng = np.random.default_rng(31)
+    h, w = 420, 640
+    yy, xx = np.indices((h, w))
+    bg = 120 + 60 * (xx / w) + 8 * np.sin(yy / 47) + rng.normal(0, 4, (h, w))     # Beleuchtungsgradient
+    gt = np.zeros((h, w), np.uint8)
+    for k in range(7):
+        x0 = int(40 + k * 85 + rng.integers(-10, 10))
+        y0 = int(rng.integers(40, 160))
+        pts = [[x0 + int(5 * np.sin(t / 3 + k)), y0 + t * 9] for t in range(int(rng.integers(14, 26)))]
+        pts = [[min(w - 2, max(1, x)), min(h - 2, y)] for x, y in pts]
+        cv2.polylines(gt, [np.array(pts, np.int32)], False, 255, thickness=int(rng.integers(2, 4)))
+    img = bg - cv2.GaussianBlur(gt, (3, 3), .7).astype(np.float32) / 255 * (0.45 * bg)
+    pores = np.zeros_like(gt)
+    for _ in range(14):
+        cv2.circle(pores, (int(rng.integers(15, w - 15)), int(rng.integers(15, h - 15))), int(rng.integers(3, 7)), 255, -1)
+    img -= cv2.GaussianBlur(pores, (5, 5), 1.2).astype(np.float32) / 255 * (0.40 * bg)
+    riefe = np.zeros_like(gt)
+    cv2.line(riefe, (30, 360), (610, 352), 255, 2)                              # parallel zur Dehnung
+    img -= cv2.GaussianBlur(riefe, (3, 3), .7).astype(np.float32) / 255 * (0.35 * bg)
+    img = np.clip(img, 0, 255).astype(np.uint8)
+    p = WORK / 'lernbild.png'
+    cv2.imwrite(str(p), img)
+    cv2.imwrite(str(WORK / 'lernbild_ground_truth.png'), gt)
+    return p.read_bytes()
+
+
+def demo_set():
+    """Alle 8 Demobilder mit Zuordnung (Gruppe/Zustand)."""
+    files = eng.create_demo(WORK / 'demo')
+    return _dump([{'name': Path(f['path']).name, 'group': f['group'], 'state': f['state'],
+                   'b64': _b64(Path(f['path']).read_bytes())} for f in files])
+
+
+def pipeline(key, sensitivity=1.0, min_area=16):
+    """Zwischenergebnisse der Rissoptimierten Segmentierung, Schritt für Schritt (für den Lernpfad).
+    Nutzt dieselben Funktionen und Konstanten wie crack_optimized_mask()."""
+    st = STORE[key]
+    rgb, gray, _ = eng.read_img(st['path'])
+    h, w = gray.shape
+    k = max(.2, float(sensitivity))
+    src = cv2.GaussianBlur(gray, (3, 3), .65).astype(np.float32)
+    sig_b = max(8, min(h, w) / 22)
+    bg = np.maximum(eng.smooth_background(src, sig_b), 1.0)
+    inv = np.clip(1 - src / bg, 0, 1)
+    vess, contrast = eng.crack_features(gray, 'dunkel')
+    score = np.minimum(vess / eng.V_REF, contrast / eng.C_MIN) * k
+    from skimage.filters import apply_hysteresis_threshold
+    from skimage.morphology import skeletonize
+    strong = score >= 1.0
+    weak = score >= 0.5
+    hyst = apply_hysteresis_threshold(score, 0.5, 1.0)
+    small_removed = eng.remove_small(hyst, min_area)
+    final = eng.crack_optimized_mask(gray, 'dunkel', sensitivity, min_area)
+    sk = skeletonize(final)
+    n_e, n_o = eng.chain_counts(sk)
+    stages = []
+
+    def add(sid, img, **meta):
+        stages.append({'id': sid, 'img': _b64(_enc(img, '.png' if img.dtype == np.uint8 and img.ndim == 3 else '.jpg')),
+                       **meta})
+
+    add('original', rgb)
+    add('grau', np.dstack([gray] * 3), stat={'Mittelwert': float(gray.mean()), 'Min': int(gray.min()), 'Max': int(gray.max())})
+    add('hintergrund', np.dstack([np.clip(bg, 0, 255).astype(np.uint8)] * 3), stat={'sigma_B': round(float(sig_b), 2)})
+    add('weber', _cmap(inv, 0, 0.5, cv2.COLORMAP_INFERNO), stat={'max': float(inv.max()), 'p99': float(np.percentile(inv, 99))})
+    add('frangi', _cmap(vess / eng.V_REF, 0, 2, cv2.COLORMAP_VIRIDIS),
+        stat={'Anteil V ≥ V_ref/k [%]': float(100 * (vess >= eng.V_REF / k).mean())})
+    add('blackhat', _cmap(contrast / eng.C_MIN, 0, 2, cv2.COLORMAP_VIRIDIS),
+        stat={'Anteil C ≥ C_min/k [%]': float(100 * (contrast >= eng.C_MIN / k).mean())})
+    add('score', _cmap(score, 0, 2, cv2.COLORMAP_TURBO), stat={'Anteil Score ≥ 1 [%]': float(100 * strong.mean()),
+                                                                'Anteil Score ≥ 0,5 [%]': float(100 * weak.mean())})
+    hv = (rgb * .35).astype(np.uint8)
+    hv[weak & ~hyst] = (90, 90, 160)          # schwach, ohne Verbindung -> verworfen
+    hv[hyst & ~strong] = (120, 220, 255)       # schwach, aber mit starkem Bereich verbunden
+    hv[strong] = (255, 210, 60)               # stark
+    add('hysterese', hv, stat={'starke Pixel': int(strong.sum()), 'nur schwach, verbunden': int((hyst & ~strong).sum()),
+                               'schwach, isoliert (verworfen)': int((weak & ~hyst).sum())})
+    fv = (rgb * .35).astype(np.uint8)
+    fv[hyst & ~small_removed] = (150, 150, 150)
+    fv[small_removed & ~final] = (235, 70, 70)
+    fv[final] = (16, 224, 207)
+    n0 = eng.components(hyst)[0] - 1
+    n1 = eng.components(small_removed)[0] - 1
+    n2 = eng.components(final)[0] - 1
+    add('formfilter', fv, stat={'Komponenten nach Hysterese': n0, 'nach A_min': n1, 'nach Formfilter': n2})
+    sv = (rgb * .45).astype(np.uint8)
+    sv[final] = (40, 110, 120)
+    sv[cv2.dilate(sk.astype(np.uint8), np.ones((2, 2), np.uint8)) > 0] = (255, 240, 80)
+    L = eng.KULPA * (n_e + math.sqrt(2) * n_o)
+    add('skelett', sv, stat={'n_e (orthogonal)': n_e, 'n_o (diagonal)': n_o, 'Pixelzahl Skelett': int(sk.sum()),
+                             'L Kulpa [px]': round(L, 1)})
+    r = eng.analyze(st['path'], mode='riss', sensitivity=sensitivity, min_area=min_area, scale_um=0.8,
+                    strain_direction_deg=0.0)
+    add('ergebnis', r['overlay'], stat={k: r['summary'].get(k) for k in (
+        'object_count', 'feature_area_fraction_pct', 'crack_clean_length_density_mm_per_mm2',
+        'crack_clean_mean_width_um', 'crack_clean_perpendicular_length_fraction_pct')})
+    return _dump({'stages': stages, 'k': k, 'width': w, 'height': h})
+
+
+def run_selftest():
+    """Systemtest im Browser: Äquivalenzprüfung + synthetische Validierung + Analyse aller Demobilder."""
+    t0 = time.perf_counter()
+    out = {'frangi': eng.frangi_equivalence_check()}
+    val = eng.validate_reference_set(WORK / 'selftest_val')
+    out['validation'] = val['scores']
+    files = eng.create_demo(WORK / 'selftest_demo')
+    rows = []
+    for f in files:
+        r = eng.analyze(f['path'], scale_um=0.8, strain_direction_deg=0.0)
+        v = r['summary']
+        rows.append({'name': Path(f['path']).name, 'n': v['object_count'], 'phi': v['feature_area_fraction_pct'],
+                     'LA': v.get('crack_clean_length_density_mm_per_mm2')})
+    out['demo'] = rows
+    out['runtime_s'] = round(time.perf_counter() - t0, 2)
+    return _dump(out)
+
+
+# ----------------------------------------------------------------------------- Eigene Validierung (Bild + Maske)
+VAL_STORE: dict[str, dict] = {}
+
+
+def put_val_pair(key, img_name, img_bytes, mask_name, mask_bytes):
+    """Speichert ein Referenzpaar (Aufnahme + manuell gezeichnete Rissmaske, gleiche Pixelgröße)."""
+    if hasattr(img_bytes, 'to_py'):
+        img_bytes = img_bytes.to_py()
+    if hasattr(mask_bytes, 'to_py'):
+        mask_bytes = mask_bytes.to_py()
+    folder = WORK / 'eigene_validierung' / _safe(key)
+    folder.mkdir(parents=True, exist_ok=True)
+    ip, mp_ = folder / _safe(img_name), folder / ('maske_' + _safe(mask_name))
+    ip.write_bytes(bytes(img_bytes))
+    mp_.write_bytes(bytes(mask_bytes))
+    rgb, gray, _ = eng.read_img(ip)
+    gt = ber._refmask(mp_)
+    if gray.shape != gt.shape:
+        raise ValueError(f'Bild {gray.shape[1]}×{gray.shape[0]} px und Maske {gt.shape[1]}×{gt.shape[0]} px sind '
+                         'unterschiedlich groß (keine automatische Skalierung).')
+    frac = float(gt.mean())
+    if frac > 0.75:
+        raise ValueError('Die Maske ist zu > 75 % positiv – vermutlich invertiert. Risse müssen weiß (bzw. nicht schwarz) sein.')
+    # Komplett schwarze Maske = rissfreie Referenz (z. B. ungealterte Probe): zulässig, prüft Fehlalarme.
+    VAL_STORE[key] = {'img': ip, 'mask': mp_, 'name': img_name, 'mask_name': mask_name,
+                      'sha_img': eng.file_sha256(ip), 'sha_mask': eng.file_sha256(mp_)}
+    return _dump({'width': gray.shape[1], 'height': gray.shape[0], 'gt_fraction_pct': round(100 * frac, 3),
+                  'rissfrei': not bool(gt.any())})
+
+
+def remove_val_pair(key):
+    VAL_STORE.pop(key, None)
+    return 'ok'
+
+
+def _metrics(pred, gt):
+    from skimage.morphology import skeletonize
+    TP = int(np.count_nonzero(pred & gt)); FP = int(np.count_nonzero(pred & ~gt))
+    FN = int(np.count_nonzero(~pred & gt))
+    prec = TP / (TP + FP) if TP + FP else 0.0
+    rec = TP / (TP + FN) if TP + FN else 0.0
+    f1 = 2 * TP / (2 * TP + FP + FN) if 2 * TP + FP + FN else 1.0
+    iou = TP / (TP + FP + FN) if TP + FP + FN else 1.0
+    Lg = eng.skeleton_length(skeletonize(gt)) if gt.any() else 0.0
+    Lp = eng.skeleton_length(skeletonize(pred)) if pred.any() else 0.0
+    if not gt.any():
+        # Rissfreie Referenz: Precision/Recall/F1 sind nicht definiert; gezählt werden nur Fehlalarme.
+        return dict(TP=0, FP=FP, FN=0, precision=None, recall=None, f1=None, iou=None, length_error_pct=None,
+                    rissfrei=True, fehlalarm_laenge_px=round(float(Lp), 1))
+    return dict(TP=TP, FP=FP, FN=FN, precision=round(prec, 4), recall=round(rec, 4), f1=round(f1, 4),
+                iou=round(iou, 4), length_error_pct=round(100 * (Lp / Lg - 1), 2) if Lg else None,
+                rissfrei=False, fehlalarm_laenge_px=None)
+
+
+def own_validation(keys_json, opts_json, params_json=None):
+    """Validierung an eigenen, manuell markierten Aufnahmen.
+    opts: algorithms, k_list, min_area, polarity, holdout (Liste der Schlüssel, die NICHT zur k-Wahl dienen).
+    k wird nur auf den Entwicklungsbildern gewählt; Holdout-Bilder prüfen die Wahl unabhängig."""
+    keys = [k for k in json.loads(keys_json) if k in VAL_STORE]
+    if not keys:
+        raise ValueError('Keine Referenzpaare geladen.')
+    opt = json.loads(opts_json or '{}')
+    algs = opt.get('algorithms') or ['rissoptimiert', 'erweitert']
+    ks = sorted({float(x) for x in (opt.get('k_list') or [0.5, 0.75, 1.0, 1.25, 1.5])})
+    amin = int(opt.get('min_area') or 16)
+    pol = opt.get('polarity') or 'dunkel'
+    hold = set(opt.get('holdout') or [])
+    mp = eng.resolve_params(json.loads(params_json) if params_json else None)
+    t0 = time.perf_counter()
+    rows, preds, neg = [], {}, set()
+    with eng.use_params(mp):
+        for key in keys:
+            it = VAL_STORE[key]
+            rgb, gray, _ = eng.read_img(it['img'])
+            gt = ber._refmask(it['mask'])
+            if not gt.any():
+                neg.add(key)
+            for alg in algs:
+                for k in ks:
+                    pred = eng.make_mask(gray, 'riss', pol, k, amin, alg).astype(bool)
+                    preds[(key, alg, k)] = pred
+                    rows.append(dict(key=key, bild=it['name'], maske=it['mask_name'], sha256_bild=it['sha_img'],
+                                     sha256_maske=it['sha_mask'], rolle='rissfrei' if key in neg else ('Holdout' if key in hold else 'Entwicklung'),
+                                     verfahren=alg, k=k, A_min=amin, **_metrics(pred, gt)))
+    scores, images = {}, {}
+    pos_keys = [k for k in keys if k not in neg]
+    if not pos_keys:
+        raise ValueError('Alle Masken sind leer (rissfrei). Für F1 und die Wahl von k wird mindestens ein Bild mit '
+                         'eingezeichneten Rissen benötigt.')
+    # k-Wahl nur an Entwicklungsbildern MIT Rissen; rissfreie Bilder werden getrennt als Fehlalarm-Prüfung ausgewiesen.
+    dev_keys = [k for k in pos_keys if k not in hold] or pos_keys
+    for alg in algs:
+        def mean_f1(k, subset):
+            v = [r['f1'] for r in rows if r['verfahren'] == alg and r['k'] == k and r['key'] in subset and r['f1'] is not None]
+            return float(np.mean(v)) if v else None
+        best = max(ks, key=lambda k: mean_f1(k, dev_keys))
+        sel = lambda subset: [r for r in rows if r['verfahren'] == alg and r['k'] == best and r['key'] in subset]
+        dev, ho = sel(dev_keys), sel([k for k in pos_keys if k in hold])
+        negr = sel(sorted(neg))
+
+        def agg(rs, f):
+            v = [r[f] for r in rs if r.get(f) is not None]
+            return round(float(np.mean(v)), 4) if v else None
+        scores[alg] = dict(k=best, k_am_rand=best in (ks[0], ks[-1]) and len(ks) > 1,
+                           dev_n=len(dev), dev_f1=agg(dev, 'f1'), dev_precision=agg(dev, 'precision'),
+                           dev_recall=agg(dev, 'recall'), dev_length_error_pct=agg(dev, 'length_error_pct'),
+                           holdout_n=len(ho), holdout_f1=agg(ho, 'f1'), holdout_precision=agg(ho, 'precision'),
+                           holdout_recall=agg(ho, 'recall'), holdout_length_error_pct=agg(ho, 'length_error_pct'),
+                           rissfrei_n=len(negr), rissfrei_fehlalarm_px=agg(negr, 'FP'),
+                           rissfrei_fehlalarm_laenge_px=agg(negr, 'fehlalarm_laenge_px'),
+                           f1_kurve=[(k, round(mean_f1(k, dev_keys), 4)) for k in ks])
+        for key in keys[:6]:
+            it = VAL_STORE[key]
+            rgb, gray, _ = eng.read_img(it['img'])
+            gt = ber._refmask(it['mask'])
+            pred = preds[(key, alg, best)]
+            vis = (rgb.astype(np.float32) * .55)
+            vis[pred & gt] = (40, 200, 90); vis[pred & ~gt] = (235, 60, 60); vis[~pred & gt] = (60, 120, 255)
+            h, w = gray.shape
+            f = min(1.0, 900 / max(h, w))
+            vis = cv2.resize(vis.astype(np.uint8), (int(w * f), int(h * f)), interpolation=cv2.INTER_AREA)
+            images.setdefault(alg, []).append({'name': it['name'], 'rolle': 'rissfrei' if key in neg else ('Holdout' if key in hold else 'Entwicklung'),
+                                               'png': _b64(_enc(vis, '.png'))})
+    rep = {'scores': scores, 'rows': rows, 'images': images, 'k_list': ks, 'algorithms': algs, 'min_area': amin,
+           'polarity': pol, 'method_params': mp, 'method_params_hash': eng.params_hash(mp),
+           'method_params_changed': eng.changed_params(mp), 'software': eng.environment_info(),
+           'runtime_s': round(time.perf_counter() - t0, 2),
+           'hinweis': ('k wird nur auf den Entwicklungsbildern mit Rissen gewählt. Ohne Holdout-Bilder ist der F1-Wert optimistisch '
+                       '(Auswahl und Bewertung auf denselben Daten). Rissfreie Bilder (leere Maske) gehen nicht in F1 ein, '
+                       'sondern werden als Fehlalarme ausgewiesen.')}
+    VAL_STORE['__last'] = rep
+    return _dump({k: v for k, v in rep.items()})
+
+
+def own_validation_files():
+    """ZIP mit CSV (alle Läufe), JSON (vollständig) und Overlay-Bildern der letzten eigenen Validierung."""
+    rep = VAL_STORE.get('__last')
+    if not rep:
+        raise ValueError('Noch keine eigene Validierung ausgeführt.')
+    import csv as _csv
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as z:
+        s_ = io.StringIO()
+        cols = [c for c in rep['rows'][0] if c != 'key']
+        w = _csv.DictWriter(s_, fieldnames=cols, delimiter=';', extrasaction='ignore')
+        w.writeheader()
+        for r in rep['rows']:
+            w.writerow({k: (('ja' if v else 'nein') if isinstance(v, bool) else str(v).replace('.', ',') if isinstance(v, float) else v)
+                        for k, v in r.items()})
+        z.writestr('validierung_eigene_bilder.csv', '﻿' + s_.getvalue())
+        z.writestr('validierung_eigene_bilder.json', json.dumps({k: v for k, v in rep.items() if k != 'images'},
+                                                                 ensure_ascii=False, indent=2, default=str))
+        for alg, ims in rep['images'].items():
+            for im in ims:
+                z.writestr(f'overlays/{alg}_{_safe(im["name"])}.png', __import__('base64').b64decode(im['png']))
+    return buf.getvalue()

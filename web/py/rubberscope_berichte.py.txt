@@ -1,0 +1,451 @@
+#!/usr/bin/env python3
+"""Separierte Validierungs- und Rechenprotokolle fuer RubberScope.
+
+Fachlicher Status: Dokumentiert und kontrolliert Algorithmen, aber die Ausgabe
+ist kein Nachweis einer ISO-konformen Ozonpruefung oder einer Realprobenvalidierung.
+"""
+from __future__ import annotations
+import csv
+import json
+import math
+from datetime import datetime
+from pathlib import Path
+from xml.sax.saxutils import escape
+
+import numpy as np
+from PIL import Image
+
+import rubberscope_engine as eng
+
+
+def _styles():
+    from reportlab.lib import colors
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    reg, bold, _ = eng._register_fonts()
+    ss = getSampleStyleSheet()
+    return {
+        'normal': ParagraphStyle('RSExtraN', parent=ss['Normal'], fontName=reg, fontSize=9, leading=13, spaceAfter=6),
+        'small': ParagraphStyle('RSExtraS', parent=ss['Normal'], fontName=reg, fontSize=7.8, leading=10.5),
+        'title': ParagraphStyle('RSExtraT', parent=ss['Heading1'], fontName=bold, fontSize=17, leading=21, textColor=colors.HexColor('#125269')),
+        'h': ParagraphStyle('RSExtraH', parent=ss['Heading2'], fontName=bold, fontSize=11.5, leading=15, spaceBefore=12, spaceAfter=5, textColor=colors.HexColor('#125269')),
+        'cell': ParagraphStyle('RSExtraC', parent=ss['Normal'], fontName=reg, fontSize=7.2, leading=9.5),
+        'cb': ParagraphStyle('RSExtraCB', parent=ss['Normal'], fontName=bold, fontSize=7.2, leading=9.5),
+        'reg': reg,
+    }
+
+
+def _p(s, style, markup=False):
+    from reportlab.platypus import Paragraph
+    return Paragraph(str(s) if markup else escape(str(s)), style)
+
+
+def _tab(rows, widths, sty):
+    from reportlab.platypus import LongTable
+    from reportlab.lib import colors
+    from reportlab.platypus import TableStyle
+    data = [[_p(v, sty['cb'] if i == 0 else sty['cell']) for v in row] for i, row in enumerate(rows)]
+    tbl = LongTable(data, colWidths=widths, repeatRows=1, hAlign='LEFT')
+    tbl.setStyle(TableStyle([
+        ('VALIGN',(0,0),(-1,-1),'TOP'), ('ROWBACKGROUNDS',(0,1),(-1,-1),[colors.white,colors.HexColor('#F2F6F9')]),
+        ('BACKGROUND',(0,0),(-1,0),colors.HexColor('#DDECF2')), ('LINEBELOW',(0,0),(-1,-1),0.25,colors.HexColor('#C9D8DE')),
+        ('TOPPADDING',(0,0),(-1,-1),5),('BOTTOMPADDING',(0,0),(-1,-1),5),
+    ]))
+    return tbl
+
+
+def _build(out, title, story, sty):
+    from reportlab.platypus import SimpleDocTemplate, Spacer
+    from reportlab.lib.pagesizes import A4
+    out = Path(out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    doc = SimpleDocTemplate(str(out), pagesize=A4, topMargin=43, bottomMargin=45,
+                            leftMargin=43, rightMargin=43, title=title,
+                            subject='RubberScope ' + eng.VERSION)
+    def foot(canvas, document):
+        canvas.setFont(sty['reg'], 7)
+        canvas.drawString(43, 22, 'RubberScope ' + eng.VERSION + ' | explorative Bildanalyse, nicht normzertifiziert')
+        canvas.drawRightString(A4[0]-43, 22, 'Seite ' + str(document.page))
+    doc.build([_p(title, sty['title']), Spacer(1,8)] + story, onFirstPage=foot, onLaterPages=foot)
+    return out
+
+
+# Zitierfahige Grundlagen und transparent gekennzeichnete Eigenfestlegungen.
+# [R...] sind Originalquellcode-Stellen, keine externen Publikationen.
+METHOD_SOURCES = [
+    ('Q01', 'ITU-R BT.601-5 (1995), Studio encoding parameters of digital television. Farbbild-/Luma-Gewichte 0,299/0,587/0,114.',
+     'https://www.itu.int/dms_pubrec/itu-r/rec/bt/R-REC-BT.601-5-199510-S!!PDF-E.pdf'),
+    ('Q02', 'OpenCV, Smoothing Images (GaussianBlur): Gauß-Faltung und Vorverarbeitung.',
+     'https://docs.opencv.org/4.13.0/dc/dd3/tutorial_gausian_median_blur_bilateral_filter.html'),
+    ('Q03', 'Frangi, A. F. et al. (1998): Multiscale Vessel Enhancement Filtering, MICCAI, S. 130-137. DOI 10.1007/BFb0056195.',
+     'https://doi.org/10.1007/BFb0056195'),
+    ('Q04', 'scikit-image 0.26, filters.frangi und apply_hysteresis_threshold; implementierte Parameter und Schnittstellen.',
+     'https://scikit-image.org/docs/0.26.x/api/skimage.filters.html'),
+    ('Q05', 'OpenCV, More Morphology Transformations, Abschnitt Closing und Black Hat.',
+     'https://docs.opencv.org/4.10.0/d3/dbe/tutorial_opening_closing_hats.html'),
+    ('Q06', 'Zhang, T. Y.; Suen, C. Y. (1984): A fast parallel algorithm for thinning digital patterns, CACM 27(3), 236-239. DOI 10.1145/357994.358023.',
+     'https://doi.org/10.1145/357994.358023'),
+    ('Q07', 'Kulpa, Z. (1977): Area and perimeter measurement of blobs in discrete binary pictures, CGIP 6, 434-451. DOI 10.1016/S0146-664X(77)80021-X.',
+     'https://doi.org/10.1016/S0146-664X(77)80021-X'),
+    ('Q08', 'OpenCV, Image Moments, zentrale Momente und geometrische Bildmerkmale.',
+     'https://docs.opencv.org/4.x/d0/d49/tutorial_moments.html'),
+    ('Q09', 'scikit-image 0.26, measure.regionprops, eccentricity und orientation aus zweiten zentralen Momenten.',
+     'https://scikit-image.org/docs/0.26.x/api/skimage.measure.html'),
+    ('Q10', 'JCGM 100:2008, Guide to the expression of uncertainty in measurement, Abschnitt 5: Unsicherheitsfortpflanzung. DOI 10.59161/JCGM100-2008E.',
+     'https://doi.org/10.59161/JCGM100-2008E'),
+    ('Q11', 'NIST, Statistical Techniques, Kapitel 8: Student-t-Konfidenzintervalle der Mittelwertschaetzung.',
+     'https://www.nist.gov/system/files/documents/2019/05/13/section-8-statistics-techniques-20190506.pdf'),
+    ('Q12', 'SciPy, stats.ttest_ind: Welch-t-Test mit equal_var=False.',
+     'https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.ttest_ind.html'),
+    ('Q13', 'Holm, S. (1979): A simple sequentially rejective multiple test procedure, Scandinavian Journal of Statistics 6, 65-70.',
+     'https://www.ime.usp.br/~abe/lista/pdf4R8xPVzCnX.pdf'),
+    ('Q14', 'Sokolova, M.; Lapalme, G. (2009): A systematic analysis of performance measures for classification tasks. DOI 10.1016/j.ipm.2009.03.002.',
+     'https://doi.org/10.1016/j.ipm.2009.03.002'),
+    ('Q15', 'NIST FIPS 180-4, Secure Hash Standard, SHA-256. DOI 10.6028/NIST.FIPS.180-4.',
+     'https://doi.org/10.6028/NIST.FIPS.180-4'),
+    ('Q16', 'ISO 1431-1:2024, Resistance to ozone cracking - Part 1: Static and dynamic strain testing. Nur fachliche Orientierung, keine Konformitaet.',
+     'https://www.iso.org/standard/86601.html'),
+    ('Q17', 'van der Walt et al. (2014): scikit-image: image processing in Python, PeerJ 2:e453. DOI 10.7717/peerj.453.',
+     'https://doi.org/10.7717/peerj.453'),
+    ('R01', 'RubberScope 2.4, Eigenimplementierung: rubberscope_engine.py, _to_uint8(), read_img(), metadata_scale(). Zahlenwahl anhand Eingabedaten bzw. Programmlogik; nicht extern standardisiert.', ''),
+    ('R02', 'RubberScope 2.4, Eigenimplementierung: rubberscope_engine.py, smooth_background(), contrast_mask(), crack_features(). Sigma-Festlegungen, Schwellen C_min und k sind projektspezifisch.', ''),
+    ('R03', 'RubberScope 2.4, Eigenimplementierung: rubberscope_engine.py, crack_features(), crack_optimized_mask(), make_mask(), ab 2.5 frangi_fast() (rechnerisch identisch zu skimage.filters.frangi). Kombination V/C, Auswahl von Skalen und Hysteresegrenzen sind projektspezifisch.', ''),
+    ('R04', 'RubberScope 2.4, Eigenimplementierung: rubberscope_engine.py, components(), shape_moments(), measure_objects(), _summarize(). Geometrische Kennwertdefinitionen und Filterkonstanten.', ''),
+    ('R05', 'RubberScope 2.4, Eigenimplementierung: rubberscope_engine.py, chain_counts(), skeleton_length(), feret_max(). Konkrete digitale Kantenzaehlung und +1-px-Feret-Korrektur.', ''),
+    ('R06', 'RubberScope 2.4, Eigenimplementierung: rubberscope_engine.py, angle_to_axis(), Parameter perp_min_deg, _crack_metrics_from_mask(). Winkelgrenze (Standard 60 Grad, ab 2.6 einstellbar) ist projektspezifisch.', ''),
+    ('R07', 'RubberScope 2.4, Eigenimplementierung: rubberscope_engine.py, _stats(), group_statistics(), group_tests(). Statistik nach Bilddaten, nicht zwingend unabhaengige Pruefkoerper.', ''),
+    ('R08', 'RubberScope 2.4, Eigenimplementierung: rubberscope_engine.py, validate_reference_set() / selftest(); rubberscope_berichte.py, validate_real_reference_set(). Definition der Referenzpruefungen.', ''),
+    ('R10', 'RubberScope 2.7, Eigenimplementierung: rubberscope_engine.py, profile_widths(), _fit_width_model(). Rissbreite aus Grauwertprofilen senkrecht zur Mittellinie: Halbwertsbreite (FWHM) bzw. Kastenprofil-Gauss-Modell mit R2-Grenze; Validierung an Demo-Set und Testkarte TK-1.', ''),
+    ('R09', 'RubberScope 2.4, Eigenimplementierung: rubberscope_berichte.py, rechenprotokoll(). Algebraische Einsetzungen mit Roh-/Objektkennwerten, Rundungsdifferenzen moeglich.', ''),
+]
+
+def _beleg(*source_ids):
+    return ' Beleg: ' + ', '.join('[' + s + ']' for s in source_ids) + '.'
+
+
+def _statfmt(value):
+    if value is None: return '-'
+    try: return f'{float(value):.5g}'
+    except (ValueError, TypeError): return str(value)
+
+
+def _quellenverzeichnis(story, sty):
+    from reportlab.lib import colors
+    story.append(_p('Quellenverzeichnis und Herkunft der Eigenfestlegungen', sty['h']))
+    story.append(_p('Externe Referenzen Q01-Q17 begruenden die Grundmethoden; Referenzen R01-R09 verweisen auf die tatsaechliche, nicht extern publizierte RubberScope-Implementierung. Eigene Schwellenwerte, Zahlenfaktoren und Auswertedefinitionen werden dadurch nicht zu Normvorgaben.', sty['normal']))
+    for key, desc, link in METHOD_SOURCES:
+        entry = '<b>[' + key + ']</b> ' + escape(desc)
+        if link:
+            entry += ' <link href="' + escape(link) + '" color="#17678B">' + escape(link) + '</link>'
+        story.append(_p(entry, sty['small'], markup=True))
+
+
+def rechenprotokoll(results, folder):
+    """Eigenstaendige Rechenvorschriften + zahlenbasierte, pro-Bild rueckrechenbare Herleitungen."""
+    folder = Path(folder)
+    sty = _styles(); story = []
+    P = lambda t: story.append(_p(t, sty['normal']))
+    H = lambda t: story.append(_p(t, sty['h']))
+    H('Zweck und Geltungsbereich')
+    P('Dieses eigenstaendige Methodenprotokoll erklaert die implementierten Rechenvorschriften und ordnet JEDE Formel einer externen Fachquelle und/oder einer konkreten Code-Stelle zu. Eigene Schwellenwerte sind als Eigenfestlegungen gekennzeichnet und keine Normwerte.' + _beleg('R09', 'Q16'))
+    P('Datenstand: ' + datetime.now().isoformat(timespec='minutes') + '; RubberScope: ' + eng.VERSION + '. Rohbilder, SHA-256, Parameter und Softwareversion muessen zur Reproduktion gemeinsam archiviert werden.' + _beleg('Q15', 'R01'))
+    sets = eng.param_sets(results)
+    mp = next(iter(sets.values()))[0] if sets else eng.DEFAULT_PARAMS
+    fp = eng.fmt_param
+    H('A0. Verwendete Methodenparameter')
+    if len(sets) > 1:
+        P('ACHTUNG: ' + str(len(sets)) + ' verschiedene Parametersaetze. Die Formeln in A-C sind mit dem ersten Satz (' + next(iter(sets)) + ') eingesetzt; die Saetze sind vollstaendig in der Tabelle und in methodenparameter.csv aufgefuehrt.')
+    for h_, (mp_, names) in sets.items():
+        ch = eng.changed_params(mp_)
+        P('Parametersatz ' + h_ + ' (' + str(len(names)) + ' Bild(er)): ' + ('alle Werte = Programmstandard.' if not ch else str(len(ch)) + ' Werte vom Programmstandard abweichend (mit * markiert): ' + ', '.join(ch) + '. Abweichende Werte sind eigene Festlegungen des Anwenders.') + _beleg('R09'))
+        story.append(_tab([['Parameter', 'Wert', 'Standard', 'Einheit', 'Beleg']] + [
+            [('* ' if chg else '') + lab, val, d, u, '[' + c + ']' if c else ''] for g, lab, k, val, d, chg, u, c in eng.param_rows(mp_)],
+            [205, 80, 80, 45, 95], sty))
+    H('A. Daten, Kalibrierung und Vorverarbeitung')
+    for name, desc, sources in [
+        ('RGB-Grauwert', 'Y = 0,299 R + 0,587 G + 0,114 B. Luma-Gewichte gemaess ITU-R BT.601; Bildumsetzung per OpenCV.', ('Q01','R01')),
+        ('Mehr-Bit-Bild', 'I8 = round(255 I/(2^b - 1)); b = 12 falls Imax <= 4095, sonst 16. Dies ist eine eigene Programmheuristik und KEINE normierte Erkennung der Sensorbittiefe.', ('R01',)),
+        ('Pixelkalibrierung', 's = eingestellte Pixelgroesse in Mikrometer/Pixel oder ueberpruefte Bildmetadaten; A = N_px*s^2, L = L_px*s. Die Umrechnung folgt der geometrischen Dimensionsanalyse; s muss messtechnisch abgesichert sein.', ('R01','R04','Q10')),
+        ('Vorglaettung', f"Gauss-Filter sigma = {fp(mp['pre_blur_sigma'])} px (praezise) bzw. {fp(mp['fast_pre_blur_sigma']) if mp['fast_pre_blur_sigma'] else 'OpenCV-Automatik 3x3'} (schnell).", ('Q02',)),
+        ('Lokaler Hintergrund', f"I_B = G_sigma * I_g. G_sigma ist der Gauss-Faltungskern; sigma_B = max({fp(mp['fast_bg_sigma_min'])}, floor(min(H,W)/{fp(mp['fast_bg_sigma_divisor'])})) fuer Kontrast und " + (f"fest {fp(mp['bg_sigma_fixed'])} px" if mp['bg_sigma_fixed'] else f"max({fp(mp['bg_sigma_min'])}, min(H,W)/{fp(mp['bg_sigma_divisor'])})") + ' fuer Frangi. Die konkreten Sigma-Formeln sind eigene Softwarefestlegungen.', ('Q02','R02')),
+        ('Relative Abdunklung', 'I_rel = clip((I_B - I_g)/I_B, 0, 1). Der Wert ist dimensionslos; Multiplikation mit 100 ergibt Prozent. Die Anpassung an lokalen Bildhintergrund und die Begrenzung sind im Code definiert.', ('R02','Q02')),
+    ]:
+        P(name + ': ' + desc + _beleg(*sources))
+    H('B. Segmentierung – zwei getrennte Wege')
+    P(f"Kontrastmodus: I_rel, geglaettet, >= C_min/k. Fuer k = 1 gilt C_min = {fp(mp['fast_c_min'])} bei Rissen. Die Division durch k ist eine eigene Empfindlichkeitsfestlegung; sie ist KEIN ISO-Grenzwert. " + (f"Morphologisches Schliessen {mp['fast_close_size']} x {mp['fast_close_size']}" if mp['fast_close_size'] else 'Kein morphologisches Schliessen') + f"; Formfilter Hauptachse >= {fp(mp['fast_major_min'])} px und (e >= {fp(mp['fast_ecc_min'])} oder Hauptachse >= {fp(mp['fast_major_long'])} px)." + _beleg('R02','Q02','Q05'))
+    P('Mehrskalenmodus: Frangi-Linienmass V auf sigma = {' + fp(mp['frangi_sigmas']) + '} Pixel (Implementierung: ' + mp['frangi_impl'] + '). Der Frangi-Ansatz folgt der Hesse-Matrix-Eigenwertanalyse; Sigma-Menge und Parameterwahl sind RubberScope-spezifisch. Ab Version 2.5 werden die Gauss-Ableitungskerne von scikit-image unveraendert mit OpenCV gefaltet (max. Abweichung < 1e-6, automatisch geprueft).' + _beleg('Q03','Q04','R03'))
+    P('Morphologische Black-Hat-Transformation: BH_B = (I geschlossen mit B) - I, mit elliptischen Strukturelementen von ' + fp(mp['blackhat_sizes']) + ' Pixeln. C = max(BH_B)/I_B ist ein relativer Bildkontrast, KEINE Risstiefe; Groessenwahl ist eigene Parametrierung.' + _beleg('Q05','R03'))
+    P(f"Kombinierter Riss-Score: S_Riss = k * min(V/{fp(mp['v_ref'])}; C/{fp(mp['c_ref'])}), k >= {fp(mp['k_min'])}. Die Mindestfunktion erfordert beide Merkmale; V_ref und C_ref sind eigene algorithmische Referenzwerte. Hysterese: stark ab {fp(mp['hyst_high'])}, schwach ab {fp(mp['hyst_low'])} nur bei Verbindung zu einem starken Bereich." + _beleg('R03','Q04'))
+    P((f"Objektannahme: Mindest-Skelettpixelzahl N >= max({fp(mp['skel_min_abs'])}; {fp(mp['skel_min_factor'])}*sqrt(A_min)); ausserdem Exzentrizitaet e >= {fp(mp['ecc_min'])} ODER N >= {fp(mp['skel_long'])}. Diese Grenzzahlen sind eigene Filterparameter; Skelettbildung und Exzentrizitaet beruhen auf etablierten Verfahren." if mp['shape_filter'] else 'Objektannahme: Formfilter DEAKTIVIERT - alle Komponenten >= A_min werden uebernommen.') + _beleg('R03','R04','Q06','Q09'))
+    P(f"Objektbildung: {mp['connectivity']}-zusammenhaengende Komponenten; Standard-A_min = 16 Pixelquadrat." + ' Nicht zugeordnete Linien bleiben in bereinigten Risskennwerten, solange sie nicht manuell ausgeschlossen werden. Dies ist die konkrete Auswertelogik.' + _beleg('R04','Q08'))
+    H('B.1 Mathematische Grundlage der Frangi-/Black-Hat-Kombination')
+    P('Hesse-Matrix H_sigma = [[I_xx, I_xy], [I_xy, I_yy]] mit zweiten Ableitungen der Bildintensitaet. Ihre Eigenwerte folgen aus der charakteristischen Gleichung lambda+/- = (I_xx + I_yy)/2 +/- sqrt(((I_xx - I_yy)/2)^2 + I_xy^2). Die Eigenwerte sind nach Betrag zu ordnen.' + _beleg('Q03','Q04'))
+    P('R_B = |lambda_1|/|lambda_2|, mit |lambda_1| <= |lambda_2|; S = sqrt(lambda_1^2 + lambda_2^2) als Frobenius-Norm. Das lokale Linienmass lautet V_sigma = exp(-R_B^2/(2*beta^2))*(1-exp(-S^2/(2*gamma^2))). Verwendet: beta = ' + fp(mp['frangi_beta']) + ', gamma (c) = ' + fp(mp['frangi_c']) + ' (fest, nicht bildabhaengig); alpha spielt bei zweidimensionalem Frangi keine wesentliche Rolle.' + _beleg('Q03','Q04','R03'))
+    P('Morphologische Schliessung: I BULLET B = (I dilatiert mit B), danach erodiert mit B. Bei flachem B entsprechen dies lokalem Maximum und lokalem Minimum. BH_B = (I BULLET B) - I und C = BH/I_B. Die Verwendung der maximalen BH-Antwort ueber drei B-Groessen ist eine eigene Implementierungsentscheidung.' + _beleg('Q05','R03'))
+    P('Exzentrizitaet: Matrix der zentralen Bildmomente M = [[mu20,mu11],[mu11,mu02]]. Fuer Eigenwerte lambda_gross >= lambda_klein >= 0 gilt e = sqrt(1 - lambda_klein/lambda_gross). Diese Form-Eigenwerte sind NICHT die Hesse-Eigenwerte aus dem Frangi-Filter.' + _beleg('Q08','Q09','R04'))
+    H('C. Herleitung der ausgegebenen geometrischen Kennwerte')
+    formula_rows = [
+        ('A_eval = N_eval*s^2/1e6 [mm^2]', 'Bewertete Bildflaeche; s in Mikrometer/Pixel. Umrechnung 1 mm^2 = 1e6 Mikrometer^2.', ('R04','R09')),
+        ('A_i = N_i*s^2 [um^2]', 'Objektflaeche durch Zaehlen der Segmentierungspixel.', ('R04',)),
+        ('phi = 100*N_Risspixel/N_eval [%]', 'Prozentualer Anteil von Segmentierungspixeln an bewerteter Flaeche.', ('R04','R09')),
+        ('D_N = n/A_eval [1/mm^2]', 'Objektanzahl je bewerteter Flaeche; eigene Kennwertdefinition.', ('R04',)),
+        ({'kulpa': 'L_px = pi*(1+sqrt(2))/8*(n_e+sqrt(2)*n_d) [px]', 'freeman': 'L_px = n_e+sqrt(2)*n_d [px] (Freeman, ohne Kulpa-Faktor)', 'pixel': 'L_px = n_e+n_d [px] (Schrittzahl)'}[mp['length_estimator']], 'Kettenlaengenschaetzer; n_e orthogonal, n_d diagonal (gem. Code ohne orthogonale Ersatzverbindung).', ('Q07','R05')),
+        ('L_mm = L_px*s/1000 [mm]', 'Geometrische Pixel-zu-Millimeter-Umrechnung; nur bei verifizierter Kalibrierung.', ('R04','R05')),
+        ('L_A = L_mm/A_eval [mm/mm^2]', 'Eigene Kennwertdefinition Risslaengendichte bezogen auf die Auswerteflaeche.', ('R04','R09')),
+        (('w_mittel = s*Summe(A_i,px)/Summe(L_i,px) [um]', 'Laengen- und flaechenbasierte mittlere Rissbreite (Definition bis 2.6, schwellenabhaengig); KEINE Risstiefe.', ('R04','R09'))
+         if mp.get('width_method', 'flaeche') == 'flaeche' else
+         ('w_mittel = Summe(w_i*L_i)/Summe(L_i); w_i = Median der Profilbreiten quer zur Mittellinie [um]',
+          'Profilbasierte mittlere Rissbreite (' + {'modell': 'Kastenprofil-Gauss-Modell, Rueckfall Halbwertsbreite', 'profil': 'Halbwertsbreite FWHM'}.get(mp.get('width_method'), '') + '); unabhaengig von der Segmentierschwelle; KEINE Risstiefe.', ('R10','R09'))),
+        ('d_eq = 2*sqrt(A_i/pi) [um]', 'Kreisflaechen-Gleichsetzung A = pi*d^2/4, geometrische Ableitung.', ('Q09','R04')),
+        ('e = sqrt(1-lambda_klein/lambda_gross) [-]', 'Exzentrizitaet aus den ZENTRALEN OBJEKTMOMENTEN; nicht Frangi.', ('Q08','Q09','R04')),
+        ('Delta_theta = min(|theta-theta_D| mod 180; 180-(|theta-theta_D| mod 180))', 'Achsenwinkeldifferenz; quer bei >=' + fp(mp['perp_min_deg']) + ' Grad ist eigene Klassifikationsgrenze.', ('R06',)),
+        ('u(L)/L ~ u_s; u(A)/A ~ 2u_s; u(L_A)/L_A ~ u_s', 'Erste-Ordnung-Fortpflanzung eines reinen Pixelkalibrierfehlers; keine gesamte Messunsicherheit.', ('Q10','R04')),
+        ('x_quer = 100*Summe(L_i,quer)/Summe(L_i) [%]', 'Laengengewichteter Anteil; die Auswahlgrenze ' + fp(mp['perp_min_deg']) + ' Grad ist eigene Vorgabe.', ('R06',)),
+    ]
+    for formula, meaning, sources in formula_rows:
+        P(formula + ': ' + meaning + _beleg(*sources))
+    H('D. Messwerte mit eingesetzten Zahlen je Aufnahme')
+    trace = []
+    for idx, r in enumerate(results, 1):
+        v, objs = r['summary'], r['objects']
+        N_eval = int(v.get('effective_evaluated_area_px2') or 0)
+        N_mask = int(np.count_nonzero(r['mask']))
+        s = v.get('scale_um_per_px')
+        chain_ne = sum(int(o.get('chain_n_e') or 0) for o in objs)
+        chain_no = sum(int(o.get('chain_n_o') or 0) for o in objs)
+        rmp = v.get('method_params') or eng.DEFAULT_PARAMS
+        ce, co = eng.chain_coefficients(rmp['length_estimator'])
+        Lpx_unrounded = ce*chain_ne + co*chain_no
+        Lpx_program = float(v.get('crack_total_length_px') or 0)
+        Aobj = sum(int(o.get('area_px2') or 0) for o in objs)
+        Aeval = N_eval*s*s/1e6 if s else None
+        Lmm = Lpx_program*s/1000 if s else None
+        phi = 100*N_mask/N_eval if N_eval else None
+        LA = Lmm/Aeval if Aeval else None
+        w_area = Aobj/max(Lpx_program,1e-12)*s if s and Lpx_program else None
+        wm_used = rmp.get('width_method', 'flaeche')
+        w = w_area if wm_used == 'flaeche' else v.get('crack_mean_width_um')
+        Dn = len(objs)/Aeval if Aeval else None
+        H(f'D.{idx}: {v.get("file_name", "Aufnahme")}')
+        P('SHA-256: ' + v.get('sha256','-') + '; Algorithmus: ' + str(v.get('algorithm')) + '; Polaritaet: ' + str(v.get('polarity')) + '; k = ' + str(v.get('sensitivity')) + '; A_min = ' + str(v.get('min_area_px')) + ' px^2.' + _beleg('Q15','R01','R03'))
+        P('Bild: ' + str(v.get('width_px')) + ' x ' + str(v.get('height_px')) + ' Pixel; ROI netto: N_eval = ' + str(N_eval) + ' Pixel; segmentierte Pixel: N_riss = ' + str(N_mask) + '; Objekte n = ' + str(len(objs)) + '.' + _beleg('R04','R09'))
+        rows = [['Rechenschritt', 'Einsetzen der Eingangswerte', 'Ergebnis', 'Beleg']]
+        rows.append(['Flaechenanteil', f'100 * {N_mask} / {N_eval}', f'{phi:.4f} %' if phi is not None else '-', '[R04,R09]'])
+        if s:
+            rows += [
+                ['Bildflaeche', f'{N_eval} * {s}^2 / 1.000.000', f'{Aeval:.6f} mm^2', '[R04]'],
+                ['Skelett-Kettensumme', f'{ce:.6f} * {chain_ne} + {co:.6f} * {chain_no}', f'{Lpx_unrounded:.4f} px', '[Q07,R05]'],
+                ['Programmsumme (Objekt-Rundungen)', f'Summe(Objektlaengen), n={len(objs)}', f'{Lpx_program:.3f} px', '[R05,R09]'],
+                ['Risslaenge', f'{Lpx_program:.3f} * {s} / 1000', f'{Lmm:.5f} mm', '[R04,R05]'],
+                ['Risslaengendichte', f'{Lmm:.5f} / {Aeval:.6f}', f'{LA:.4f} mm/mm^2', '[R04,R09]'],
+                (['Mittlere Rissbreite', f'{Aobj} / {Lpx_program:.3f} * {s}' if Lpx_program else 'Keine Rissobjekte', f'{w:.3f} um' if w is not None else '-', '[R04,R09]']
+                 if wm_used == 'flaeche' else
+                 ['Mittlere Rissbreite (Profil)', f'Summe(w_i*L_i)/Summe(L_i), n={len(objs)}; Flaeche/Laenge zum Vergleich: ' + (f'{w_area:.3f} um' if w_area is not None else '-'), f'{w:.3f} um' if w is not None else '-', '[R10,R09]']),
+                ['Objektdichte', f'{len(objs)} / {Aeval:.6f}', f'{Dn:.3f} 1/mm^2', '[R04]']
+            ]
+        else:
+            rows.append(['Metrische Laengen/Flaechen', 'Pixelkalibrierung fehlt', 'nicht berechenbar', '[R01]'])
+        story.append(_tab(rows,[105,212,116,72],sty))
+        clean=[o for o in objs if o.get('classification') not in eng.NON_CRACK_CLASSES]
+        perp=[o for o in clean if o.get('classification') == 'Riss' or o.get('angle_to_strain_deg',0)>=rmp['perp_min_deg']] if v.get('strain_direction_deg') is not None else []
+        if s and Aeval:
+            P('Bereinigte Risslaengendichte (nur nicht ausgeschlossene Klassen): ' +
+              f'{sum(o["skeleton_length_px"] for o in clean):.3f} px * {s} um/px / 1000 / {Aeval:.6f} mm^2 = ' +
+              f'{sum(o["skeleton_length_px"] for o in clean)*s/1000/Aeval:.4f} mm/mm^2; '+
+              'ausdruecklich bestaetigte Risse: '+str(v.get('confirmed_crack_count',0))+'.'+_beleg('R04','R09'))
+            if v.get('strain_direction_deg') is not None:
+                P('Quer zur Dehnrichtung (Grenze >= ' + fp(rmp['perp_min_deg']) + ' Grad oder ausdruecklich als Riss bestaetigt): '+
+                  f'{sum(o["skeleton_length_px"] for o in perp):.3f} px * {s} / 1000 / {Aeval:.6f} = '+
+                  f'{sum(o["skeleton_length_px"] for o in perp)*s/1000/Aeval:.4f} mm/mm^2.'+_beleg('R06','R09'))
+        if objs:
+            story.append(_tab([['ID','A [R04]','n_e','n_d','L [Q07,R05]','e [Q08,R04]','Klasse [R04]']]+[
+                [str(o['id']),str(o.get('area_px2')),str(o.get('chain_n_e')),str(o.get('chain_n_o')),
+                 str(o.get('skeleton_length_px')),str(o.get('eccentricity')),str(o.get('classification'))]
+                for o in objs], [32,67,43,43,75,47,198],sty))
+        P('Objekttabelle: Objektflaeche und Form aus Bildmomenten [Q08,R04]; Kantenlaenge nach Kulpa [Q07,R05]; Klassifikation nach der Softwarelogik [R04].')
+        P('Bemerkung: Die Rueckrechnung erfolgt aus exportierten, teils gerundeten Objektkennwerten. Kleine Rundungsdifferenzen sind moeglich. Die Zuweisung als Ozonriss ist keine automatische chemische Identifikation.')
+        for o in objs:
+            trace.append({'bild':v.get('file_name'), 'sha256':v.get('sha256'), 'objekt_id':o['id'],
+                          'klasse':o.get('classification'), 'flaeche_px2':o['area_px2'],
+                          'n_e':o.get('chain_n_e'), 'n_d':o.get('chain_n_o'),
+                          'skelettlaenge_px':o.get('skeleton_length_px'),
+                          'exzentrizitaet':o.get('eccentricity'),
+                          'belege':'[Q07,R05] Kettenlaenge; [Q08,R04] Objektform; [R09] Rechenprotokoll'})
+    with (folder/'rechenweg_einzelobjekte.csv').open('w',newline='',encoding='utf-8-sig') as f:
+        if trace:
+            writer = csv.DictWriter(f,fieldnames=list(trace[0]),delimiter=';');writer.writeheader();writer.writerows(trace)
+    H('E. Gruppenstatistik / Pruefschritte')
+    P('Mittelwert x_mean = Summe(x_i)/n, Stichprobenstandardabweichung s = sqrt(Summe((x_i-x_mean)^2)/(n-1)) und ' + fp(eng.MP['ci_level']) + '%-Konfidenzintervall x_mean +/- t_(1-(1-KI)/2;n-1)*s/sqrt(n). Die Fallzahl n zaehlt Bilder, nicht automatisch unabhaengige Pruefkoerper.' + _beleg('Q11','R07'))
+    P('Welch-t-Test bei Gruppen mit n >= ' + str(eng.MP['test_min_n']) + ', Holm-Korrektur, Kennzeichnung bei p_Holm < alpha = ' + fp(eng.MP['alpha']) + '. Die Holm-Korrektur gilt fuer Mehrfachvergleiche. Es handelt sich um explorative Vergleiche, keine Validierung der Unabhaengigkeit von Replikaten.' + _beleg('Q12','Q13','R07'))
+    gs=eng.group_statistics(results)
+    if gs:
+        story.append(_tab([['Gruppe','Kennwert','n','Mittel','Std.abw.','KI95','Beleg']]+[
+            [str(r.get('group','')),str(r.get('label','')),str(r.get('n','')),
+             _statfmt(r.get('mean')), _statfmt(r.get('sd')), _statfmt(r.get('ci95')), '[Q11,R07]'] for r in gs[:90]],
+            [120,130,25,54,54,54,68],sty))
+        P('KI-Spalte: ' + fp(eng.MP['ci_level']) + '-%-Konfidenzintervall (Spaltenname aus Kompatibilitaetsgruenden KI95).')
+    H('F. Grenzen der Rechenschritte')
+    P('Einige Rechenschritte beruhen auf etablierten Verfahren, die Anpassung und Parametrierung auf RubberScope. Kalibrierungsunsicherheit, Segmentierungsrobustheit, Bildqualitaet und Annotation sind gesondert zu beurteilen. Auch ein hohes F1 auf Material fremden Bildern belegt keine ISO-1431-1-Konformitaet.')
+    _quellenverzeichnis(story,sty)
+    return _build(folder/'methoden_und_rechenprotokoll.pdf','Methoden- und Rechenprotokoll (separat)',story,sty)
+
+
+def _refmask(path):
+    arr = np.asarray(Image.open(path).convert('L'))
+    if not arr.size:
+        raise ValueError('Leere Referenzmaske: ' + str(path))
+    if int(arr.max()) <= 1:
+        return arr > 0
+    return arr >= 127
+
+
+def validate_real_reference_set(root, folder, sensitivity=1.0, min_area=16, algorithms=('rissoptimiert','erweitert')):
+    """Prueft fremdannotierte reale Bilder. Kein Nachkalibrieren am Referenzset.
+
+    Ordnerlayout: bilder/<name>.bmp und masken/<name>.bmp (alternativ *_mask.png / *_maske.png).
+    Alternativ (z. B. RubberScope-Testbilder): Aufnahmen direkt im gewaehlten Ordner, Masken in masken/.
+    Leere (schwarze) Masken gelten als rissfreie Referenz und werden nur auf Fehlalarme geprueft.
+    """
+    root, folder = Path(root), Path(folder)
+    folder.mkdir(parents=True, exist_ok=True)
+    if root.name.lower() == 'masken' and (root.parent / 'masken').is_dir():
+        root = root.parent
+    imgs, masks = root/'bilder', root/'masken'
+    if not masks.is_dir():
+        raise FileNotFoundError('Erforderlich: Ordner masken/ (Sollmasken) und die Aufnahmen in bilder/ oder direkt '
+                                'im gewaehlten Ordner. Bitte den Ordner waehlen, der masken/ enthaelt.')
+    strict = imgs.is_dir()
+    if not strict:
+        imgs = root
+    found = sorted(p for p in imgs.iterdir() if p.is_file() and p.suffix.lower() in eng.EXTS)
+    # gleiche Aufnahme als TIF und PNG nur einmal werten (TIF bevorzugt)
+    by_stem = {}
+    for p in found:
+        q = by_stem.get(p.stem.lower())
+        if q is None or (p.suffix.lower() in ('.tif', '.tiff') and q.suffix.lower() not in ('.tif', '.tiff')):
+            by_stem[p.stem.lower()] = p
+    images = sorted(by_stem.values())
+    if not images:
+        raise ValueError('Keine Aufnahmen gefunden (erwartet in bilder/ oder direkt im gewaehlten Ordner).')
+    rows, skipped = [], []
+    for ip in images:
+        candidates = [masks / (ip.stem + sx) for sx in ('.bmp','.png','.tif','_mask.png','_maske.png','_gt.png','.jpg')]
+        mp = next((p for p in candidates if p.is_file()),None)
+        if mp is None and not strict:
+            skipped.append(ip.name)
+            continue
+        if mp is None:
+            raise FileNotFoundError('Fehlende Ground-Truth-Maske zu ' + ip.name)
+        rgb, gray, _ = eng.read_img(ip)
+        gt = _refmask(mp)
+        if gray.shape != gt.shape:
+            raise ValueError(f'Groessenabweichung ohne automatische Skalierung: {ip.name} {gray.shape} vs. {mp.name} {gt.shape}')
+        if gt.mean() > 0.75:
+            raise ValueError('Die Referenzmaske enthaelt >75% positive Pixel: Vorzeichen/Maskenkodierung pruefen: ' + mp.name)
+        for alg in algorithms:
+            pred = eng.make_mask(gray,'riss','dunkel',sensitivity,min_area,alg).astype(bool)
+            TP = int(np.count_nonzero(pred & gt)); FP = int(np.count_nonzero(pred & ~gt))
+            FN = int(np.count_nonzero(~pred & gt)); TN = int(np.count_nonzero(~pred & ~gt))
+            precision = TP/(TP+FP) if (TP+FP) else (1.0 if not gt.any() else 0.0)
+            recall = TP/(TP+FN) if (TP+FN) else (1.0 if not pred.any() else 0.0)
+            f1 = 2*TP/(2*TP+FP+FN) if (2*TP+FP+FN) else 1.0
+            iou = TP/(TP+FP+FN) if (TP+FP+FN) else 1.0
+            Lgt = eng.skeleton_length(__import__('skimage.morphology',fromlist=['skeletonize']).skeletonize(gt))
+            Lpred = eng.skeleton_length(__import__('skimage.morphology',fromlist=['skeletonize']).skeletonize(pred))
+            lr = 100*(Lpred-Lgt)/Lgt if Lgt > 0 else None
+            overlay = rgb.copy()
+            overlay[gt & pred] = [55,170,95]
+            overlay[pred & ~gt] = [235,75,75]
+            overlay[gt & ~pred] = [60,125,235]
+            out_overlay=folder/f'{ip.stem}_{alg}_referenzvergleich.png'
+            Image.fromarray(overlay).save(out_overlay)
+            rows.append(dict(bild=ip.name,maske=mp.name,sha256=eng.file_sha256(ip),maske_sha256=eng.file_sha256(mp),
+                             verfahren=alg,k=sensitivity,A_min_px2=min_area,TP=TP,FP=FP,FN=FN,TN=TN,
+                             precision=round(precision,5),recall=round(recall,5),f1=round(f1,5),iou=round(iou,5),
+                             laengenfehler_prozent=round(lr,3) if lr is not None else None,
+                             referenz_risspixel=int(gt.sum()),test_risspixel=int(pred.sum()),
+                             rissfrei=not bool(gt.any()),
+                             groesse=f'{gray.shape[1]}x{gray.shape[0]}',overlay=out_overlay.name))
+    if not rows:
+        raise FileNotFoundError('Zu keiner Aufnahme wurde eine passende Maske in masken/ gefunden '
+                                '(Maske gleich benannt oder mit Zusatz _maske / _mask).')
+    with (folder/'validierung_echte_bilder.csv').open('w',encoding='utf-8-sig',newline='') as f:
+        writer=csv.DictWriter(f,fieldnames=list(rows[0]),delimiter=';');writer.writeheader();writer.writerows(rows)
+    meta_path = root/'QUELLE_UND_LIZENZ.json'
+    provenance = json.loads(meta_path.read_text(encoding='utf-8')) if meta_path.exists() else {'status':'Datenherkunft nicht durch Manifest belegt; bitte manuell dokumentieren.'}
+    data={'type':'real_fremdmaterial', 'scope':'Fremdmaterial-Kontrolltest; KEINE Validierung an ozongealtertem Elastomer',
+          'documentation': 'Manuelle Pixelannotationen als Ground Truth; k fix vor Sichtung; Bilder sind statistische Einheiten nur im Datensatz.',
+          'source':provenance,'software':eng.environment_info(),'records':rows,'ohne_maske_uebersprungen':skipped,
+          'settings':{'sensitivity':sensitivity,'min_area_px2':min_area,'algorithms':list(algorithms)}}
+    (folder/'validierung_echte_bilder.json').write_text(json.dumps(data,ensure_ascii=False,indent=2,default=str),encoding='utf-8')
+    return data
+
+
+def validierungsprotokoll(validation, folder, suffix='synthetisch'):
+    """Separates PDF mit F1, Precision, Recall, TP/FP/FN und Einzelergebnissen."""
+    folder=Path(folder);folder.mkdir(parents=True,exist_ok=True)
+    sty=_styles();story=[]
+    P=lambda t: story.append(_p(t,sty['normal']))
+    H=lambda t: story.append(_p(t,sty['h']))
+    isreal = validation.get('type') == 'real_fremdmaterial'
+    H('1. Untersuchungsgegenstand')
+    if isreal:
+        P('Reale, extern annotierte Rissbilder. Ueberprueft wird die technische Uebereinstimmung der berechneten Segmentierungsmaske mit manuell markierten Bildpixeln, nicht das Verhalten einer ozongealterten Elastomerprobe.')
+        src=validation.get('source',{})
+        P('Datenquelle/Lizenz: ' + str(src.get('name') or src.get('source') or src.get('status') or 'nicht dokumentiert') + '; Link: ' + str(src.get('url','-')) + '; Lizenz: '+str(src.get('license','-')))
+        P('Einstellungen: ' + json.dumps(validation.get('settings',{}),ensure_ascii=False))
+        records=validation.get('records',[])
+    else:
+        P(validation.get('method','Sechs synthetische Bilder mit bekannten Pixelmasken.'))
+        P('Die ersten vier Aufnahmen wurden zur Parametersuche verwendet, die letzten beiden sind zur Ueberpruefung zurueckgehalten. Die Daten sind synthetisch und repraesentieren keine Realproben.')
+        grid = validation.get('k_grid')
+        if grid:
+            P('Gepruefte Empfindlichkeiten k: ' + '; '.join(f'{a}: ' + ', '.join(f'{x:g}' for x in g) for a, g in grid.items()) + '.' + _beleg('R08'))
+            edge = [a for a, e in (validation.get('k_at_grid_edge') or {}).items() if e]
+            if edge:
+                P('HINWEIS: Das gewaehlte k liegt am Rand des geprueften Rasters fuer ' + ', '.join(edge) + '. Das Optimum kann ausserhalb liegen; Raster erweitern.')
+        if validation.get('method_params') is not None:
+            ch = validation.get('method_params_changed') or []
+            P('Methodenparameter: Satz ' + str(validation.get('method_params_hash')) + '; ' + ('alle Werte = Programmstandard.' if not ch else 'vom Standard abweichend: ' + ', '.join(f"{k} = {eng.fmt_param(validation['method_params'][k])}" for k in ch) + '.') + _beleg('R09'))
+        records=validation.get('detail',[])
+    H('2. Metriken und Berechnung')
+    P('TP: Uebereinstimmende Risspixel; FP: automatisch segmentierte Pixel ohne Ground-Truth-Riss; FN: nicht erkannte Ground-Truth-Risspixel; TN: gemeinsam als Hintergrund klassifizierte Pixel.')
+    P('Precision = TP/(TP+FP); Recall = TP/(TP+FN); F1 = 2TP/(2TP+FP+FN); IoU = TP/(TP+FP+FN). Bei leeren Masken gelten programmspezifische Sonderfallregeln.' + _beleg('Q14','R08'))
+    P('Relativer Laengenfehler = (L_Algorithmus - L_Referenz)/L_Referenz * 100%. Definition des programmspezifischen Fehlermasses; Laengen im Pixelmassstab, ohne Kalibrierung keine Millimeterwerte.' + _beleg('R05','R08'))
+    H('3. Ergebnisuebersicht')
+    if not isreal:
+        score=validation.get('scores',{})
+        story.append(_tab([['Algorithmus','k gewaehlt','F1 Entwicklung','F1 Holdout','Laengenfehler Holdout']] +
+                          [[key,str(val.get('sensitivity')),str(val.get('development_f1')),str(val.get('holdout_f1')),
+                            str(val.get('holdout_length_error_pct'))+' %'] for key,val in score.items()],
+                          [100,70,100,100,135],sty))
+        P('Achtung: Die Werte wurden auf eigens gewaehlten k-Werten berechnet und sind nicht automatisch gueltig fuer k = 1.0.')
+        rows=[['Bild','Verfahren','k','Precision','Recall','F1','L-Fehler (%)']]
+        for r in records:
+            rows.append([str(r['image']),r['algorithm'],str(r['sensitivity']),str(r['precision']),
+                         str(r['recall']),str(r['f1']),str(r['length_error_pct'])])
+        story.append(_tab(rows,[40,107,43,76,76,60,103],sty))
+    else:
+        for alg in sorted({r['verfahren'] for r in records}):
+            rr=[r for r in records if r['verfahren']==alg and not r.get('rissfrei')]
+            nn=[r for r in records if r['verfahren']==alg and r.get('rissfrei')]
+            if rr:
+                f1=float(np.mean([r['f1'] for r in rr])); pr=float(np.mean([r['precision'] for r in rr]));
+                re=float(np.mean([r['recall'] for r in rr]));
+                P(f'{alg}: {len(rr)} Aufnahmen mit Rissen; mittleres F1 = {f1:.4f}, Precision = {pr:.4f}, Recall = {re:.4f} (arithmetischer Mittelwert je Bild).')
+            if nn:
+                P(f'{alg}: {len(nn)} rissfreie Aufnahme(n) (leere Maske, nicht im F1-Mittel); Fehlalarm-Pixel im Mittel = {float(np.mean([r["FP"] for r in nn])):.0f}.')
+        story.append(_tab([['Bild','Verfahren','TP','FP','FN','F1','IoU']] +
+                          [[r['bild'],r['verfahren'],str(r['TP']),str(r['FP']),str(r['FN']),
+                            'rissfrei' if r.get('rissfrei') else f"{r['f1']:.3f}",
+                            '–' if r.get('rissfrei') else f"{r['iou']:.3f}"] for r in records],
+                          [125,95,52,52,52,63,66],sty))
+        if validation.get('ohne_maske_uebersprungen'):
+            P('Ohne passende Maske uebersprungen: ' + ', '.join(validation['ohne_maske_uebersprungen']) + '.')
+        H('4. Darstellung der Fehlerpixel')
+        P('Alle Ueberlagerungsbilder liegen als separate PNG-Dateien vor. Gruen = richtig erkannt (TP), rot = falsch erkannt (FP), blau = nicht erkannt (FN). Jede Eingabedatei und Referenzmaske besitzt eine SHA-256-Zuordnung in der JSON-Tabelle.')
+    H('5. Interpretation und Einschraenkungen')
+    P('Die Ground Truth enthaelt manuelle Kennzeichnungen und kann selbst Unsicherheit aufweisen. Unterschiede durch Aufnahmetechnik, Kontrast, Aufloesung und Material sind moeglich. Ergebnisse an Tunnel- oder Mauerwerksrissen duerfen nicht als Ozonriss-Validierung interpretiert werden.')
+    P('ISO 1431-1 dient ausschliesslich als fachlicher Bezugsrahmen. Keine Normkonformitaet und keine allgemeine Nachweisgrenze belegt. Die Werte dienen einer reproduzierbaren Softwarepruefung.' + _beleg('Q16','R08'))
+    _quellenverzeichnis(story,sty)
+    name='validierungsprotokoll_echte_fremdbilder.pdf' if isreal else 'validierungsprotokoll_synthetisch.pdf'
+    return _build(folder/name,'Validierungsprotokoll – '+('reale Fremdbilder' if isreal else 'synthetische Referenzen'),story,sty)

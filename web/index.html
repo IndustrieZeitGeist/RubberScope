@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RubberScope Web – Ozonriss-Bildanalyse</title>
+<meta name="description" content="RubberScope Web: Ozonrisse in Elastomer-Mikroskopaufnahmen direkt im Browser auswerten – mit Lernpfad, Formeln und Quellen.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Ccircle cx=%2713%27 cy=%2713%27 r=%2710%27 fill=%27none%27 stroke=%27%230b7f8a%27 stroke-width=%273%27/%3E%3Cpath d=%27M20.5 20.5 29 29%27 stroke=%27%230b7f8a%27 stroke-width=%273.5%27 stroke-linecap=%27round%27/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<header class="top">
+  <div class="top-inner">
+    <a class="brand" href="#start" aria-label="RubberScope Web Startseite">
+      <svg viewBox="0 0 32 32" aria-hidden="true"><circle cx="13" cy="13" r="10" fill="none" stroke="currentColor" stroke-width="2.4"/><path d="M20.5 20.5 29 29" stroke="currentColor" stroke-width="3" stroke-linecap="round"/><path d="M9 6.5c1.5 2 .4 3.6 1.8 5.5s.2 3.9 1.6 6.3" fill="none" stroke="#0b7f8a" stroke-width="1.8" stroke-linecap="round"/><path d="M15 7.5c.9 1.8-.3 3.2.9 4.8s0 3.2 1 4.6" fill="none" stroke="#0b7f8a" stroke-width="1.5" stroke-linecap="round"/></svg>
+      <span>RubberScope Web <small>2.7</small></span>
+    </a>
+    <nav class="tabs" aria-label="Hauptnavigation">
+      <a href="#start">Start</a>
+      <a href="#lernen">Lernpfad</a>
+      <a href="#analyse">Analyse</a>
+      <a href="#methodik">Methodik</a>
+      <a href="#validierung">Validierung</a>
+      <a href="#quellen">Quellen</a>
+      <a href="#hilfe">Hilfe</a>
+    </nav>
+    <div id="engine-badge" data-state="idle" role="status" title="Rechenkern">
+      <span class="dot"></span><span class="label">Rechenkern: nicht geladen</span><span class="bar"><i></i></span>
+    </div>
+  </div>
+</header>
+
+<main>
+<!-- ============================================================ START -->
+<section class="view" id="view-start">
+  <div class="hero">
+    <div>
+      <span class="pill">Ozonrisse · Elastomere · Bildanalyse</span>
+      <h1>Ozonrisse sichtbar und messbar machen</h1>
+      <p class="lead">RubberScope wertet Mikroskopaufnahmen gealterter Elastomerproben aus: Es erkennt rissartige Strukturen und berechnet Risslänge, Rissbreite, Längendichte und die Orientierung zur Dehnrichtung. Ein Prüfprotokoll mit vollständigem Rechenweg kommt dazu.</p>
+      <div class="btnrow">
+        <a class="btn primary" href="#analyse">Bilder auswerten</a>
+        <a class="btn" href="#lernen">Lernpfad starten</a>
+        <button class="btn" id="start-video" type="button">▶ Erklärvideo abspielen</button>
+        <a class="btn" href="#validierung" data-testbilder>⬇ Testbilder</a>
+      </div>
+      <p class="small muted" style="margin-top:12px">🔒 <b>Deine Bilder bleiben auf deinem Gerät.</b> Die gesamte Auswertung läuft als Python-Programm im Browser (WebAssembly). Es wird nichts auf einen Server hochgeladen.</p>
+    </div>
+    <div class="card" id="start-preview">
+      <canvas id="hero-canvas" width="560" height="340" style="width:100%;border-radius:10px;background:#0b1114" aria-label="Animierte Darstellung: Rissbild und Erkennung"></canvas>
+      <p class="tiny muted" style="margin:6px 0 0">Synthetisches Beispiel: Risse quer zur Dehnrichtung (Pfeil) werden erkannt (türkis), eine Riefe parallel zur Dehnung wird über die Orientierung abgegrenzt.</p>
+    </div>
+  </div>
+
+  <div class="grid g3" style="margin-top:14px">
+    <div class="card feature">
+      <h3>🎓 Verstehen</h3>
+      <p>13 Kapitel führen von der Entstehung der Ozonrisse über Bildvorverarbeitung, Frangi-Filter und Hysterese bis zu Messunsicherheit und Validierung. Jedes Kapitel hat ein interaktives Experiment, eine Vorlesefunktion und einen kurzen Selbsttest.</p>
+      <a class="btn sm" href="#lernen">Zum Lernpfad →</a>
+    </div>
+    <div class="card feature">
+      <h3>🔬 Auswerten</h3>
+      <p>Bilder hochladen (PNG, JPG, TIFF, BMP, WebP), Maßstab und Dehnrichtung setzen und analysieren. Danach Objekte klassifizieren, Artefakte ausschließen, Gruppen statistisch vergleichen und PDF, CSV und JSON exportieren.</p>
+      <a class="btn sm" href="#analyse">Zur Analyse →</a>
+    </div>
+    <div class="card feature">
+      <h3>📚 Nachschlagen</h3>
+      <p>Jede Formel und jeder Schwellwert ist belegt: externe Fachquellen (Q, L) und klar gekennzeichnete Eigenfestlegungen des Programms (R). Ein Klick auf eine Marke wie <span data-cite="Q03"></span> zeigt die Quelle.</p>
+      <a class="btn sm" href="#methodik">Zur Methodik →</a>
+    </div>
+  </div>
+
+  <div class="grid g2" style="margin-top:16px">
+    <div class="card">
+      <h3>So geht’s in 5 Schritten</h3>
+      <ol class="steps">
+        <li><b>Bilder laden</b> per Ziehen &amp; Ablegen oder Dateiauswahl. Zum Ausprobieren gibt es Demobilder.</li>
+        <li><b>Maßstab setzen</b> (µm pro Pixel), entweder direkt eingeben oder am Maßstabsbalken im Bild abgreifen.</li>
+        <li><b>Dehnrichtung angeben</b>, damit Risse (quer) von Riefen (parallel) unterschieden werden können.</li>
+        <li><b>Analysieren und prüfen</b>: Fehlerkennungen klassifizieren oder per Rechteck ausschließen.</li>
+        <li><b>Exportieren</b>: Prüfprotokoll-PDF, Rechenprotokoll-PDF mit Quellen, Tabellen und Masken.</li>
+      </ol>
+    </div>
+    <div class="card">
+      <h3>Wichtig zur Einordnung</h3>
+      <div class="callout warn small">RubberScope liefert <b>explorative, bildbasierte Kennwerte</b>. Es ist <b>keine normkonforme Prüfung</b> nach ISO 1431-1 <span data-cite="Q16"></span> und kein automatischer Nachweis, dass eine Linie ein Ozonriss ist. Schwellenwerte sind Eigenfestlegungen <span data-cite="R03"></span> und wurden an synthetischen Bildern abgestimmt.</div>
+      <p class="small">Die Ergebnisse sind reproduzierbar: Gleiche Rohdatei (SHA-256), gleiche Parameter und gleiche Programmversion liefern identische Werte. Für die Auswertung in Berichten und Protokollen: externe Originalquellen zitieren und Eigenfestlegungen als solche benennen (siehe <a href="#hilfe">Hilfe → Ergebnisse dokumentieren</a>).</p>
+      <p class="small muted">Erster Start: Der Browser lädt einmalig etwa 40 MB Python-Bibliotheken (danach aus dem Cache). Empfohlen: aktueller Chrome, Edge oder Firefox am Laptop/PC.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ LERNPFAD -->
+<section class="view" id="view-lernen" hidden>
+  <div class="learn">
+    <aside class="toc card">
+      <h3 style="margin-bottom:4px">Lernpfad</h3>
+      <p class="tiny muted" style="margin-top:0">≈ 60 min · Fortschritt wird nur in diesem Browser gespeichert</p>
+      <ol id="toc"></ol>
+      <hr>
+      <div class="btnrow">
+        <button class="btn primary sm" id="video-all" type="button">▶ Als Video abspielen</button>
+      </div>
+      <p class="tiny muted" id="voice-info"></p>
+    </aside>
+    <div>
+      <article class="card chapter" id="chapter"></article>
+      <div class="player" id="player" hidden>
+        <button class="btn sm" id="pl-prev" type="button" title="Vorheriges Kapitel">⏮</button>
+        <button class="btn primary sm" id="pl-play" type="button">⏸ Pause</button>
+        <button class="btn sm" id="pl-stop" type="button">⏹ Stopp</button>
+        <button class="btn sm" id="pl-next" type="button" title="Nächstes Kapitel">⏭</button>
+        <label class="small">Tempo <select id="pl-rate"><option value="0.85">0,85×</option><option value="1" selected>1×</option><option value="1.15">1,15×</option><option value="1.3">1,3×</option></select></label>
+        <div class="sub" id="pl-sub" aria-live="polite"></div>
+        <div class="prog"><i id="pl-prog"></i></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ ANALYSE -->
+<section class="view" id="view-analyse" hidden>
+  <div class="ana">
+    <aside class="side card" id="ana-left">
+      <div class="drop" id="drop" tabindex="0" role="button" aria-label="Bilder auswählen oder hier ablegen">
+        <b>Bilder hier ablegen</b><br><span class="small muted">oder klicken · PNG, JPG, TIFF, BMP, WebP</span>
+        <input type="file" id="file" multiple accept=".png,.jpg,.jpeg,.tif,.tiff,.bmp,.webp,image/*" hidden>
+      </div>
+      <div class="btnrow" style="margin-top:8px">
+        <button class="btn sm" id="load-demo" type="button">Demobilder laden</button>
+        <button class="btn sm" id="remove-img" type="button" disabled>Entfernen</button>
+      </div>
+      <p class="tiny" style="margin:4px 0 0"><a href="#validierung" data-testbilder>Testbilder mit Sollwerten herunterladen →</a></p>
+      <ul class="imglist" id="imglist"></ul>
+
+      <details class="box" open>
+        <summary>Probe (ausgewähltes Bild)</summary>
+        <label class="f" for="p-state">Zustand</label>
+        <select id="p-state"><option>Unbekannt</option><option>Ungealtert (Referenz)</option><option>Gealtert</option></select>
+        <label class="f" for="p-group">Vergleichsgruppe / Rezeptur</label>
+        <input type="text" id="p-group" placeholder="z. B. Rezeptur A">
+        <label class="f" for="p-id">Proben-ID</label>
+        <input type="text" id="p-id" placeholder="Standard: Dateiname">
+        <div class="btnrow" style="margin-top:6px"><button class="btn sm" id="p-apply-all" type="button">Zustand/Gruppe auf alle markierten</button></div>
+      </details>
+
+      <details class="box" open>
+        <summary>Kalibrierung &amp; Dehnung</summary>
+        <label class="f" for="p-scale">Pixelgröße s [µm/Pixel]</label>
+        <div class="row2"><input type="number" id="p-scale" step="any" min="0" placeholder="leer = nur Pixelwerte"><button class="btn sm" id="tool-scale" type="button" title="Maßstabsbalken im Bild abgreifen">📏 abgreifen</button></div>
+        <p class="hint" id="scale-src"></p>
+        <label class="f" for="p-unc">Unsicherheit der Kalibrierung u<sub>s</sub> [%]</label>
+        <input type="number" id="p-unc" step="any" min="0" placeholder="optional, z. B. 1">
+        <label class="f" for="p-strain">Dehnrichtung φ<sub>D</sub> [°] (0° = waagerecht)</label>
+        <div class="row2"><input type="number" id="p-strain" step="any" placeholder="leer = ohne"><button class="btn sm" id="tool-strain" type="button" title="Dehnrichtung im Bild einzeichnen">↔ einzeichnen</button></div>
+        <label class="chk"><input type="checkbox" id="p-same" checked> Kalibrierung &amp; Dehnrichtung für alle Bilder gleich</label>
+      </details>
+
+      <details class="box" open>
+        <summary>Segmentierung</summary>
+        <label class="f" for="p-alg">Verfahren</label>
+        <select id="p-alg"><option value="rissoptimiert">Präzise · Mehrskalen (Frangi + Black-Hat)</option><option value="erweitert">Schnell · Weber-Kontrast</option></select>
+        <label class="f" for="p-k">Empfindlichkeit k</label>
+        <div class="row2" style="grid-template-columns:1fr 78px"><input type="range" id="p-k" min="0.2" max="3" step="0.05" value="1" aria-label="Empfindlichkeit k (Schieberegler)"><input type="number" id="p-k-num" min="0.01" max="20" step="0.01" value="1" aria-label="Empfindlichkeit k (Zahl)"></div>
+        <p class="hint">k &gt; 1 senkt alle Schwellen (mehr wird erkannt), k &lt; 1 hebt sie an. Freie Eingabe 0,01–20 im Zahlenfeld.</p>
+        <label class="f" for="p-amin">Mindestfläche A<sub>min</sub> [px²]</label>
+        <input type="number" id="p-amin" min="1" step="1" value="16">
+        <label class="f" for="p-pol">Polarität</label>
+        <select id="p-pol"><option value="dunkel">Risse dunkel auf hellem Grund</option><option value="hell">Risse hell auf dunklem Grund</option></select>
+        <label class="chk"><input type="checkbox" id="p-edge"> Objekte am Bildrand ausschließen</label>
+        <label class="chk"><input type="checkbox" id="p-robust"> Sensitivitätsanalyse (k × Faktoren, Standard 0,8 / 1,2)</label>
+        <label class="chk"><input type="checkbox" id="p-ctrl"> Aufnahmebedingungen kontrolliert gleich (für Referenzvergleich)</label>
+        <div class="mp-box">
+          <div id="mp-badge" class="mp-badge std">Methodenparameter: Programmstandard</div>
+          <button class="btn sm" id="mp-open" type="button">⚙ Methodenparameter (alle Festlegungen) …</button>
+          <p class="hint">Schwellen, Filtergrößen, Formfilter, Hysterese, Längenschätzer, Winkelgrenze, Statistik … Wird mit jedem Ergebnis gespeichert und im Protokoll ausgewiesen.</p>
+        </div>
+        <details><summary class="small">Zusatzmerkmale</summary>
+          <label class="chk"><input type="checkbox" id="p-bright"> Helle Auffälligkeiten</label>
+          <label class="chk"><input type="checkbox" id="p-surface"> Reflexionskandidaten / Textur</label>
+        </details>
+      </details>
+      <div class="btnrow" style="margin-top:10px">
+        <button class="btn primary" id="run-one" type="button" disabled>▶ Analysieren</button>
+        <button class="btn" id="run-all" type="button" disabled>Alle analysieren</button>
+      </div>
+    </aside>
+
+    <div class="center">
+      <div class="card" style="padding:12px">
+        <div class="toolbar" role="toolbar" aria-label="Werkzeuge">
+          <span class="small muted">Ansicht:</span>
+          <button class="btn sm on" data-view="overlay" type="button">Ergebnis</button>
+          <button class="btn sm" data-view="original" type="button">Original</button>
+          <button class="btn sm" data-view="mask" type="button">Maske</button>
+          <span class="sep"></span>
+          <span class="small muted">Werkzeug:</span>
+          <button class="btn sm on" data-tool="pan" type="button" title="Verschieben / Zoomen (Mausrad)">✋ Navigieren</button>
+          <button class="btn sm" data-tool="label" type="button" title="Objekt anklicken und Klasse zuweisen">🏷 Klassifizieren</button>
+          <button class="btn sm" data-tool="exclude" type="button" title="Rechteck aufziehen">⛔ Ausschließen</button>
+          <button class="btn sm" data-tool="overlap" type="button" title="Berührtes Objekt behalten/ausschließen">⇄ Überlappung</button>
+          <button class="btn sm" data-tool="profile" type="button" title="Grauwertprofil entlang einer Linie">📈 Schnitt</button>
+          <span class="sep"></span>
+          <button class="btn sm" id="undo-ex" type="button" title="Letzten Ausschluss entfernen">↶ Ausschluss</button>
+          <button class="btn sm" id="reset-ann" type="button">Korrekturen zurücksetzen</button>
+          <button class="btn sm" id="fit" type="button" title="Ganzes Bild zeigen">⤢</button>
+        </div>
+        <div class="viewer" id="viewer">
+          <canvas id="cv"></canvas>
+          <div class="empty" id="viewer-empty"><div><b>Noch kein Bild</b><br><span class="small">Links Bilder laden oder „Demobilder laden“ wählen.</span></div></div>
+          <div class="busy"><div><div class="spinner"></div><span id="busy-text">Analyse läuft …</span></div></div>
+          <div class="hud" id="hud"></div>
+          <div class="legend" id="legend" hidden><i style="background:#10e0cf"></i>Objekt<i style="background:#ff5046"></i>Ausschluss<i style="background:#ffdc4b"></i>ID/Klasse</div>
+        </div>
+        <div class="toolhelp" id="toolhelp">Mausrad = zoomen, Ziehen = verschieben. Doppelklick = ganzes Bild.</div>
+      </div>
+    </div>
+
+    <aside class="right card" id="ana-right">
+      <div class="tabs2" role="tablist">
+        <button class="on" data-rt="werte" type="button">Kennwerte</button>
+        <button data-rt="objekte" type="button">Objekte</button>
+        <button data-rt="statistik" type="button">Vergleich</button>
+        <button data-rt="export" type="button">Export</button>
+      </div>
+      <div data-rp="werte"><p class="muted small">Noch keine Auswertung.</p></div>
+      <div data-rp="objekte" hidden><p class="muted small">Noch keine Auswertung.</p></div>
+      <div data-rp="statistik" hidden><p class="muted small">Mindestens zwei ausgewertete Bilder nötig.</p></div>
+      <div data-rp="export" hidden></div>
+    </aside>
+  </div>
+</section>
+
+<!-- ============================================================ METHODIK -->
+<section class="view" id="view-methodik" hidden>
+  <div class="prose">
+    <h1>Methodik &amp; Rechenvorschrift</h1>
+    <p class="lead muted">Kompakte Referenz aller Rechenschritte von RubberScope 2.7. Ausführlich erklärt im <a href="#lernen">Lernpfad</a>, mit eingesetzten Zahlen im exportierten <i>Methoden- und Rechenprotokoll</i>.</p>
+    <div class="callout small"><b>Lesehilfe:</b> <span data-cite="Q03"></span> = externe Fachquelle; <span data-cite="R03"></span> = Programmstelle bzw. Eigenfestlegung (keine externe Quelle, kein Normwert).</div>
+  </div>
+  <div id="methodik-content" class="prose"></div>
+  <div class="prose"><h2>7 · Alle einstellbaren Methodenparameter</h2><p class="small">Jede Festlegung des Verfahrens kann unter <b>Analyse → ⚙ Methodenparameter</b> geändert, als Voreinstellung (JSON) gespeichert und wieder geladen werden. Die Standardwerte liefern exakt die Ergebnisse von RubberScope 2.4/2.5. Abweichungen werden je Bild gespeichert und im Prüf- und Rechenprotokoll markiert; Bilder mit verschiedenen Parametersätzen werden in Statistik und Referenzvergleich automatisch getrennt.</p><div id="param-ref"></div></div>
+</section>
+
+<!-- ============================================================ VALIDIERUNG -->
+<section class="view" id="view-validierung" hidden>
+  <div class="prose">
+    <h1>Validierung</h1>
+    <p>Wie gut erkennt das Programm Risse, deren Lage genau bekannt ist? Dazu werden sechs <b>synthetische</b> Bilder mit bekannter Pixelmaske (Ground Truth) erzeugt. Für jede Empfindlichkeit k werden Precision, Recall, F1 und der Längenfehler bestimmt <span data-cite="Q14,R08"></span>. k wird an den Bildern 1–4 gewählt und an den zurückgehaltenen Bildern 5–6 (Holdout) überprüft.</p>
+    <div class="callout warn small">Synthetische Bilder ersetzen <b>keine</b> Validierung an realen Ozonrissaufnahmen mit manuell gezeichneten Masken. Die Werte zeigen, ob die Algorithmen technisch korrekt arbeiten, nicht, wie gut sie echte Elastomer-Oberflächen beurteilen.</div>
+    <div class="btnrow"><button class="btn primary" id="val-run" type="button">▶ Validierung jetzt im Browser ausführen</button><button class="btn" id="val-pdf" type="button" disabled>Validierungsprotokoll (PDF)</button><button class="btn" id="selftest-run" type="button">Systemtest</button></div>
+  </div>
+  <div id="testbilder" class="prose" style="margin-top:10px"></div>
+  <div id="val-extra" class="prose" style="margin-top:10px"></div>
+  <div id="val-out" style="margin-top:14px"></div>
+</section>
+
+<!-- ============================================================ QUELLEN -->
+<section class="view" id="view-quellen" hidden>
+  <div class="prose">
+    <h1>Quellenverzeichnis</h1>
+    <p>Alle im Programm, in den Protokollen und im Lernpfad verwendeten Belege. <b>Q</b> = externe Fachquellen der Methode, <b>L</b> = ergänzende Quellen des Lernpfads, <b>R</b> = Stellen im Quellcode von RubberScope (Eigenimplementierung, <i>keine</i> wissenschaftliche Quelle).</p>
+    <div id="quellen-liste"></div>
+  </div>
+</section>
+
+<!-- ============================================================ HILFE -->
+<section class="view" id="view-hilfe" hidden>
+  <div class="prose" id="hilfe-content"></div>
+</section>
+</main>
+
+<footer>
+  RubberScope Web 2.7 · Rechenkern: Python (NumPy, SciPy, scikit-image, OpenCV) über Pyodide im Browser · explorative Bildauswertung, nicht normzertifiziert ·
+  <a href="#quellen">Quellen</a> · <a href="#hilfe">Hilfe &amp; Datenschutz</a>
+</footer>
+
+<script src="js/core.js"></script>
+<script src="js/sources.js"></script>
+<script src="js/content.js"></script>
+<script src="js/demos.js"></script>
+<script src="js/lernen.js"></script>
+<script src="js/params.js"></script>
+<script src="js/testbilder.js"></script>
+<script src="js/analyse.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>

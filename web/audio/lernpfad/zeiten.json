@@ -1,0 +1,143 @@
+{
+ "ozon": {
+  "src": "audio/lernpfad/kap01.mp3",
+  "starts": [
+   0.0,
+   8.76,
+   40.11,
+   54.24,
+   70.38
+  ],
+  "dauer": 88.88
+ },
+ "bild": {
+  "src": "audio/lernpfad/kap02.mp3",
+  "starts": [
+   0.0,
+   5.15,
+   22.43,
+   39.33,
+   56.46
+  ],
+  "dauer": 68.24
+ },
+ "weber": {
+  "src": "audio/lernpfad/kap03.mp3",
+  "starts": [
+   0.0,
+   5.55,
+   19.59,
+   31.25,
+   45.38
+  ],
+  "dauer": 53.28
+ },
+ "frangi": {
+  "src": "audio/lernpfad/kap04.mp3",
+  "starts": [
+   0.0,
+   5.44,
+   16.87,
+   32.23,
+   47.28,
+   62.88
+  ],
+  "dauer": 72.64
+ },
+ "blackhat": {
+  "src": "audio/lernpfad/kap05.mp3",
+  "starts": [
+   0.0,
+   3.95,
+   16.51,
+   32.07
+  ],
+  "dauer": 42.96
+ },
+ "score": {
+  "src": "audio/lernpfad/kap06.mp3",
+  "starts": [
+   0.0,
+   5.15,
+   20.32,
+   31.52,
+   49.12
+  ],
+  "dauer": 62.72
+ },
+ "form": {
+  "src": "audio/lernpfad/kap07.mp3",
+  "starts": [
+   0.0,
+   4.22,
+   15.19,
+   31.99
+  ],
+  "dauer": 46.8
+ },
+ "laenge": {
+  "src": "audio/lernpfad/kap08.mp3",
+  "starts": [
+   0.0,
+   5.08,
+   16.48,
+   29.91,
+   51.43
+  ],
+  "dauer": 55.6
+ },
+ "kennwerte": {
+  "src": "audio/lernpfad/kap09.mp3",
+  "starts": [
+   0.0,
+   5.29,
+   31.57,
+   42.59,
+   57.36
+  ],
+  "dauer": 73.84
+ },
+ "statistik": {
+  "src": "audio/lernpfad/kap11.mp3",
+  "starts": [
+   0.0,
+   3.79,
+   18.88,
+   33.76
+  ],
+  "dauer": 50.64
+ },
+ "validierung": {
+  "src": "audio/lernpfad/kap12.mp3",
+  "starts": [
+   0.0,
+   5.15,
+   20.18,
+   33.61,
+   47.29
+  ],
+  "dauer": 62.72
+ },
+ "praxis": {
+  "src": "audio/lernpfad/kap13.mp3",
+  "starts": [
+   0.0,
+   3.15,
+   18.98,
+   32.81,
+   43.44
+  ],
+  "dauer": 60.0
+ },
+ "korrektur": {
+  "src": "audio/lernpfad/kap10.mp3",
+  "starts": [
+   0.0,
+   3.96,
+   16.34,
+   28.51,
+   47.27
+  ],
+  "dauer": 55.6
+ }
+}
